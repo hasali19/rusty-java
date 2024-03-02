@@ -19,8 +19,10 @@ pub struct ClassFile {
     pub attributes: Vec<AttributeInfo>,
 }
 
-mod constant_pool {
+pub mod constant_pool {
     use std::ops::Index;
+
+    use strum::EnumTryAs;
 
     #[derive(Debug)]
     pub struct ConstantPool(pub(crate) Vec<ConstantInfo>);
@@ -39,7 +41,7 @@ mod constant_pool {
         }
     }
 
-    #[derive(Debug)]
+    #[derive(Debug, EnumTryAs)]
     pub enum ConstantInfo {
         Utf8(std::string::String),
         Class(Class),
@@ -152,7 +154,7 @@ pub struct CodeAttribute {
 pub enum Instruction {
     aload { index: u8 },
     invokespecial { index: u16 },
-    ret,
+    retvoid,
     iconst { value: i8 },
     istore { index: u8 },
     iload { index: u8 },
@@ -459,7 +461,7 @@ impl<R: io::Read> ClassReader<R> {
                         60 => Instruction::istore { index: 1 },
                         61 => Instruction::istore { index: 2 },
                         62 => Instruction::istore { index: 3 },
-                        177 => Instruction::ret,
+                        177 => Instruction::retvoid,
                         183 => Instruction::invokespecial {
                             index: cursor.read_u16_be()?,
                         },
