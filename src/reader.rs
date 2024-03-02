@@ -2,7 +2,7 @@ use std::io;
 
 use bitflags::bitflags;
 use byteorder::{BigEndian, ReadBytesExt};
-use color_eyre::eyre::{self, bail, Context, ContextCompat};
+use color_eyre::eyre::{self, bail, Context};
 use constant_pool::{ConstantInfo, ConstantPool};
 
 #[derive(Debug)]
@@ -115,13 +115,16 @@ bitflags! {
 
 #[derive(Debug)]
 pub enum AttributeInfo {
-    Code(CodeAttributeInfo),
-    LineNumberTable(LineNumberTableAttributeInfo),
-    Custom(CustomAttributeInfo),
+    Code(CodeAttribute),
+    LineNumberTable(LineNumberTableAttribute),
+    BootstrapMethods(BootstrapMethodsAttribute),
+    InnerClasses(InnerClassesAttribute),
+    SourceFile(SourceFileAttribute),
+    Custom(CustomAttribute),
 }
 
 #[derive(Debug)]
-pub struct CodeAttributeInfo {
+pub struct CodeAttribute {
     pub max_stack: u16,
     pub max_locals: u16,
     pub code: Vec<u8>,
@@ -138,7 +141,7 @@ pub struct ExceptionTableEntry {
 }
 
 #[derive(Debug)]
-pub struct LineNumberTableAttributeInfo {
+pub struct LineNumberTableAttribute {
     pub line_number_table: Vec<LineNumberTableEntry>,
 }
 
@@ -149,7 +152,52 @@ pub struct LineNumberTableEntry {
 }
 
 #[derive(Debug)]
-pub struct CustomAttributeInfo {
+pub struct BootstrapMethodsAttribute {
+    pub bootstrap_methods: Vec<BootstrapMethod>,
+}
+
+#[derive(Debug)]
+pub struct BootstrapMethod {
+    pub bootstrap_method_ref: u16,
+    pub bootstrap_arguments: Vec<u16>,
+}
+
+#[derive(Debug)]
+pub struct InnerClassesAttribute {
+    pub classes: Vec<InnerClass>,
+}
+
+#[derive(Debug)]
+pub struct InnerClass {
+    pub inner_class_info_index: u16,
+    pub outer_class_info_index: u16,
+    pub inner_name_index: u16,
+    pub inner_class_access_flags: InnerClassAccessFlags,
+}
+
+bitflags! {
+    #[derive(Debug)]
+    pub struct InnerClassAccessFlags: u16 {
+        const PUBLIC = 0x0001;
+        const PRIVATE = 0x0002;
+        const PROTECTED = 0x0004;
+        const STATIC = 0x0008;
+        const FINAL = 0x0010;
+        const INTERFACE = 0x0200;
+        const ABSTRACT = 0x0400;
+        const SYNTHETIC = 0x1000;
+        const ANNOTATION = 0x2000;
+        const ENUM = 0x4000;
+    }
+}
+
+#[derive(Debug)]
+pub struct SourceFileAttribute {
+    pub sourcefile_index: u16,
+}
+
+#[derive(Debug)]
+pub struct CustomAttribute {
     pub attribute_name_index: u16,
     pub info: Vec<u8>,
 }
@@ -176,6 +224,7 @@ impl<R: io::Read> ClassReader<R> {
         let interfaces = self.read_interfaces()?;
         let fields = self.read_fields()?;
         let methods = self.read_methods(&constant_pool)?;
+        let attributes = self.read_attributes(&constant_pool)?;
 
         Ok(ClassFile {
             minor_version,
@@ -187,7 +236,7 @@ impl<R: io::Read> ClassReader<R> {
             interfaces,
             fields,
             methods,
-            attributes: vec![],
+            attributes,
         })
     }
 
@@ -281,8 +330,7 @@ impl<R: io::Read> ClassReader<R> {
 
     fn read_method_info(&mut self, constant_pool: &ConstantPool) -> eyre::Result<MethodInfo> {
         Ok(MethodInfo {
-            access_flags: MethodAccessFlags::from_bits(self.read_u16()?)
-                .wrap_err("unexpected bits in method access flags")?,
+            access_flags: MethodAccessFlags::from_bits_truncate(self.read_u16()?),
             name_index: self.read_u16()?,
             descriptor_index: self.read_u16()?,
             attributes: self.read_attributes(constant_pool)?,
@@ -309,8 +357,15 @@ impl<R: io::Read> ClassReader<R> {
 
         let attribute_info = match name.as_str() {
             "Code" => AttributeInfo::Code(self.read_code_attribute(constant_pool)?),
-            "LineNumberTable" => AttributeInfo::LineNumberTable(self.read_line_number_table()?),
-            _ => AttributeInfo::Custom(CustomAttributeInfo {
+            "LineNumberTable" => {
+                AttributeInfo::LineNumberTable(self.read_line_number_table_attribute()?)
+            }
+            "BootstrapMethods" => {
+                AttributeInfo::BootstrapMethods(self.read_bootstrap_methods_attribute()?)
+            }
+            "InnerClasses" => AttributeInfo::InnerClasses(self.read_inner_classes_attribute()?),
+            "SourceFile" => AttributeInfo::SourceFile(self.read_source_file_attribute()?),
+            _ => AttributeInfo::Custom(CustomAttribute {
                 attribute_name_index,
                 info: {
                     let mut bytes = vec![0; length];
@@ -323,11 +378,8 @@ impl<R: io::Read> ClassReader<R> {
         Ok(attribute_info)
     }
 
-    fn read_code_attribute(
-        &mut self,
-        constant_pool: &ConstantPool,
-    ) -> eyre::Result<CodeAttributeInfo> {
-        Ok(CodeAttributeInfo {
+    fn read_code_attribute(&mut self, constant_pool: &ConstantPool) -> eyre::Result<CodeAttribute> {
+        Ok(CodeAttribute {
             max_stack: self.read_u16()?,
             max_locals: self.read_u16()?,
             code: {
@@ -353,8 +405,8 @@ impl<R: io::Read> ClassReader<R> {
         })
     }
 
-    fn read_line_number_table(&mut self) -> eyre::Result<LineNumberTableAttributeInfo> {
-        Ok(LineNumberTableAttributeInfo {
+    fn read_line_number_table_attribute(&mut self) -> eyre::Result<LineNumberTableAttribute> {
+        Ok(LineNumberTableAttribute {
             line_number_table: {
                 let length = self.read_u16()? as usize;
                 (0..length)
@@ -366,6 +418,53 @@ impl<R: io::Read> ClassReader<R> {
                     })
                     .collect::<Result<_, _>>()?
             },
+        })
+    }
+
+    fn read_bootstrap_methods_attribute(&mut self) -> eyre::Result<BootstrapMethodsAttribute> {
+        Ok(BootstrapMethodsAttribute {
+            bootstrap_methods: {
+                let length = self.read_u16()? as usize;
+                (0..length)
+                    .map(|_| -> eyre::Result<BootstrapMethod> {
+                        Ok(BootstrapMethod {
+                            bootstrap_method_ref: self.read_u16()?,
+                            bootstrap_arguments: {
+                                let length = self.read_u16()? as usize;
+                                (0..length)
+                                    .map(|_| self.read_u16())
+                                    .collect::<Result<_, _>>()?
+                            },
+                        })
+                    })
+                    .collect::<Result<_, _>>()?
+            },
+        })
+    }
+
+    fn read_inner_classes_attribute(&mut self) -> eyre::Result<InnerClassesAttribute> {
+        Ok(InnerClassesAttribute {
+            classes: {
+                let length = self.read_u16()? as usize;
+                (0..length)
+                    .map(|_| -> eyre::Result<InnerClass> {
+                        Ok(InnerClass {
+                            inner_class_info_index: self.read_u16()?,
+                            outer_class_info_index: self.read_u16()?,
+                            inner_name_index: self.read_u16()?,
+                            inner_class_access_flags: InnerClassAccessFlags::from_bits_truncate(
+                                self.read_u16()?,
+                            ),
+                        })
+                    })
+                    .collect::<Result<_, _>>()?
+            },
+        })
+    }
+
+    fn read_source_file_attribute(&mut self) -> eyre::Result<SourceFileAttribute> {
+        Ok(SourceFileAttribute {
+            sourcefile_index: self.read_u16()?,
         })
     }
 
