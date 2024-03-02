@@ -1,4 +1,4 @@
-use std::io;
+use std::io::{self, Cursor};
 
 use bitflags::bitflags;
 use byteorder::{BigEndian, ReadBytesExt};
@@ -142,9 +142,24 @@ pub enum AttributeInfo {
 pub struct CodeAttribute {
     pub max_stack: u16,
     pub max_locals: u16,
-    pub code: Vec<u8>,
+    pub code: Vec<Instruction>,
     pub exception_table: Vec<ExceptionTableEntry>,
     pub attributes: Vec<AttributeInfo>,
+}
+
+#[allow(non_camel_case_types)]
+#[derive(Debug)]
+pub enum Instruction {
+    aload { index: u8 },
+    invokespecial { index: u16 },
+    ret,
+    iconst { value: i8 },
+    istore { index: u8 },
+    iload { index: u8 },
+    invokedynamic { index: u16 },
+    invokestatic { index: u16 },
+    ldc { index: u16 },
+    ldc2 { index: u16 },
 }
 
 #[derive(Debug)]
@@ -401,7 +416,72 @@ impl<R: io::Read> ClassReader<R> {
                 let length = self.read_u32()? as usize;
                 let mut bytes = vec![0; length];
                 self.0.read_exact(&mut bytes)?;
-                bytes
+
+                let mut instructions = vec![];
+                let mut cursor = Cursor::new(&bytes);
+
+                while let Ok(opcode) = cursor.read_u8() {
+                    let instruction = match opcode {
+                        2 => Instruction::iconst { value: -1 },
+                        3 => Instruction::iconst { value: 0 },
+                        4 => Instruction::iconst { value: 1 },
+                        5 => Instruction::iconst { value: 2 },
+                        6 => Instruction::iconst { value: 3 },
+                        7 => Instruction::iconst { value: 4 },
+                        8 => Instruction::iconst { value: 5 },
+                        18 => Instruction::ldc {
+                            index: cursor.read_u8()? as u16,
+                        },
+                        19 => Instruction::ldc {
+                            index: cursor.read_u16_be()?,
+                        },
+                        20 => Instruction::ldc2 {
+                            index: cursor.read_u16_be()?,
+                        },
+                        21 => Instruction::iload {
+                            index: cursor.read_u8()?,
+                        },
+                        25 => Instruction::aload {
+                            index: cursor.read_u8()?,
+                        },
+                        26 => Instruction::iload { index: 0 },
+                        27 => Instruction::iload { index: 1 },
+                        28 => Instruction::iload { index: 2 },
+                        29 => Instruction::iload { index: 3 },
+                        42 => Instruction::aload { index: 0 },
+                        43 => Instruction::aload { index: 1 },
+                        44 => Instruction::aload { index: 2 },
+                        45 => Instruction::aload { index: 3 },
+                        54 => Instruction::istore {
+                            index: cursor.read_u8()?,
+                        },
+                        59 => Instruction::istore { index: 0 },
+                        60 => Instruction::istore { index: 1 },
+                        61 => Instruction::istore { index: 2 },
+                        62 => Instruction::istore { index: 3 },
+                        177 => Instruction::ret,
+                        183 => Instruction::invokespecial {
+                            index: cursor.read_u16_be()?,
+                        },
+                        184 => Instruction::invokestatic {
+                            index: cursor.read_u16_be()?,
+                        },
+                        186 => {
+                            let index = cursor.read_u16_be()?;
+                            let zero = cursor.read_u16_be()?;
+                            if zero != 0 {
+                                bail!(
+                                    "invalid bytes found in invokedynamic instruction: 0x{zero:0x}"
+                                );
+                            }
+                            Instruction::invokedynamic { index }
+                        }
+                        _ => bail!("unknown opcode: {opcode}"),
+                    };
+                    instructions.push(instruction);
+                }
+
+                instructions
             },
             exception_table: {
                 let length = self.read_u16()? as usize;
@@ -500,5 +580,15 @@ impl<R: io::Read> ClassReader<R> {
             self.read_u8()?;
         }
         Ok(())
+    }
+}
+
+trait EndianReadExt {
+    fn read_u16_be(&mut self) -> io::Result<u16>;
+}
+
+impl<R: io::Read> EndianReadExt for R {
+    fn read_u16_be(&mut self) -> io::Result<u16> {
+        self.read_u16::<BigEndian>()
     }
 }
