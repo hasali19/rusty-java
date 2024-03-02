@@ -10,7 +10,7 @@ pub struct ClassFile {
     pub minor_version: u16,
     pub major_version: u16,
     pub constant_pool: ConstantPool,
-    pub access_flags: u16,
+    pub access_flags: ClassAccessFlags,
     pub this_class: u16,
     pub super_class: u16,
     pub interfaces: Vec<u16>,
@@ -76,6 +76,21 @@ mod constant_pool {
     pub struct InvokeDynamic {
         pub bootstrap_method_attr_index: u16,
         pub name_and_type_index: u16,
+    }
+}
+
+bitflags! {
+    #[derive(Debug)]
+    pub struct ClassAccessFlags: u16 {
+        const PUBLIC = 0x0001;
+        const FINAL = 0x0010;
+        const SUPER = 0x0020;
+        const INTERFACE = 0x0200;
+        const ABSTRACT = 0x0400;
+        const SYNTHETIC = 0x1000;
+        const ANNOTATION = 0x2000;
+        const ENUM = 0x4000;
+        const MODULE = 0x8000;
     }
 }
 
@@ -218,7 +233,7 @@ impl<R: io::Read> ClassReader<R> {
         let minor_version = self.read_u16()?;
         let major_version = self.read_u16()?;
         let constant_pool = self.read_constant_pool()?;
-        let access_flags = self.read_u16()?;
+        let access_flags = ClassAccessFlags::from_bits_truncate(self.read_u16()?);
         let this_class = self.read_u16()?;
         let super_class = self.read_u16()?;
         let interfaces = self.read_interfaces()?;
