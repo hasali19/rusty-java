@@ -3,42 +3,41 @@ use std::io::BufReader;
 
 use clap::Parser;
 use color_eyre::eyre::{self, bail, eyre, Context, ContextCompat};
-use rusty_java::reader::constant_pool::{self, ConstantInfo};
-use rusty_java::reader::{AttributeInfo, ClassFile, ClassReader, Instruction};
+use rusty_java::class::Class;
+use rusty_java::class_file::constant_pool::{self, ConstantInfo};
+use rusty_java::class_file::{AttributeInfo, Instruction};
+use rusty_java::reader::ClassReader;
 
 #[derive(clap::Parser)]
 struct Args {
     class_file: String,
+    #[clap(long)]
+    dump: bool,
 }
 
 fn main() -> eyre::Result<()> {
     color_eyre::install()?;
 
     let args = Args::parse();
-    let class = ClassReader::new(BufReader::new(File::open(&args.class_file)?))
+
+    let class_file = ClassReader::new(BufReader::new(File::open(&args.class_file)?))
         .read_class_file()
         .wrap_err_with(|| eyre!("failed to read class file at '{}'", args.class_file))?;
 
-    execute_method(&class, "main").wrap_err("failed to execute main method")?;
+    let class = Class::new(&class_file)?;
+
+    if args.dump {
+        println!("{class:#?}");
+    } else {
+        execute_method(&class, "main").wrap_err("failed to execute main method")?;
+    }
 
     Ok(())
 }
 
-fn execute_method(class: &ClassFile, method_name: &str) -> eyre::Result<()> {
+fn execute_method(class: &Class, method_name: &str) -> eyre::Result<()> {
     let method = class
-        .methods
-        .iter()
-        .find_map(|method| {
-            let ConstantInfo::Utf8(name) = class.constant_pool.get(method.name_index)? else {
-                return None;
-            };
-
-            if name != method_name {
-                return None;
-            }
-
-            Some(method)
-        })
+        .method(method_name)
         .wrap_err_with(|| eyre!("method not found"))?;
 
     let code_attr = method
@@ -130,30 +129,30 @@ fn execute_method(class: &ClassFile, method_name: &str) -> eyre::Result<()> {
                 pc += 1;
             }
             Instruction::invokedynamic { index } => {
-                let invoke_dynamic = &class.constant_pool[*index]
+                let invoke_dynamic = &class.constant_pool()[*index]
                     .try_as_invoke_dynamic_ref()
                     .wrap_err("invalid operand for invokedynamic")?;
 
-                let name_and_type = class.constant_pool[invoke_dynamic.name_and_type_index]
+                let name_and_type = class.constant_pool()[invoke_dynamic.name_and_type_index]
                     .try_as_name_and_type_ref()
                     .wrap_err("expected name_and_type")?;
 
-                let name = class.constant_pool[name_and_type.name_index]
+                let name = class.constant_pool()[name_and_type.name_index]
                     .try_as_utf_8_ref()
                     .wrap_err("expected utf8")?;
 
                 panic!("exec {name}");
             }
             Instruction::invokestatic { index } => {
-                let invoke_dynamic = &class.constant_pool[*index]
+                let invoke_dynamic = &class.constant_pool()[*index]
                     .try_as_method_ref_ref()
                     .wrap_err("expected methodref")?;
 
-                let name_and_type = class.constant_pool[invoke_dynamic.name_and_type_index]
+                let name_and_type = class.constant_pool()[invoke_dynamic.name_and_type_index]
                     .try_as_name_and_type_ref()
                     .wrap_err("expected name_and_type")?;
 
-                let name = class.constant_pool[name_and_type.name_index]
+                let name = class.constant_pool()[name_and_type.name_index]
                     .try_as_utf_8_ref()
                     .wrap_err("expected utf8")?;
 
@@ -177,12 +176,12 @@ fn execute_method(class: &ClassFile, method_name: &str) -> eyre::Result<()> {
                 }
             }
             Instruction::ldc { index } => {
-                match &class.constant_pool[*index] {
+                match &class.constant_pool()[*index] {
                     ConstantInfo::Utf8(_) => todo!(),
                     ConstantInfo::Class(_) => todo!(),
                     ConstantInfo::String(constant_pool::String { string_index }) => operand_stack
                         .push(Operand::StringConst(
-                            class.constant_pool[*string_index]
+                            class.constant_pool()[*string_index]
                                 .try_as_utf_8_ref()
                                 .wrap_err("expected utf8")?,
                         )),
