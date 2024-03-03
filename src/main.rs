@@ -29,15 +29,16 @@ fn main() -> eyre::Result<()> {
     if args.dump {
         println!("{class:#?}");
     } else {
-        execute_method(&class, "main").wrap_err("failed to execute main method")?;
+        execute_method(&class, "main", "([Ljava/lang/String;)V")
+            .wrap_err("failed to execute main method")?;
     }
 
     Ok(())
 }
 
-fn execute_method(class: &Class, method_name: &str) -> eyre::Result<()> {
+fn execute_method(class: &Class, method_name: &str, method_descriptor: &str) -> eyre::Result<()> {
     let method = class
-        .method(method_name)
+        .method(method_name, method_descriptor)
         .wrap_err_with(|| eyre!("method not found"))?;
 
     let code_attr = method
