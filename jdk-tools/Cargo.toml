@@ -1,16 +1,11 @@
-[workspace]
-members = ["jdk-tools"]
-
 [package]
-name = "rusty-java"
+name = "jdk-tools"
 version = "0.1.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-bitflags = "2.4.2"
-byteorder = "1.5.0"
 clap = { version = "4.5.1", features = ["derive"] }
 color-eyre = "0.6.2"
-strum = { version = "0.26.1", features = ["derive"] }
+jni = { version = "0.21.1", features = ["invocation"] }
