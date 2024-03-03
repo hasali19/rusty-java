@@ -5,7 +5,7 @@ use clap::Parser;
 use color_eyre::eyre::{self, bail, eyre, Context, ContextCompat};
 use rusty_java::class::Class;
 use rusty_java::class_file::constant_pool::{self, ConstantInfo};
-use rusty_java::class_file::{AttributeInfo, Instruction};
+use rusty_java::class_file::{AttributeInfo, Instruction, MethodAccessFlags};
 use rusty_java::reader::ClassReader;
 
 #[derive(clap::Parser)]
@@ -157,7 +157,15 @@ fn execute_method(class: &Class, method_name: &str, method_descriptor: &str) -> 
                     .try_as_utf_8_ref()
                     .wrap_err("expected utf8")?;
 
-                if name == "print" {
+                let descriptor = class.constant_pool()[name_and_type.descriptor_index]
+                    .try_as_utf_8_ref()
+                    .wrap_err("expected utf8")?;
+
+                let method = class
+                    .method(name, descriptor)
+                    .wrap_err_with(|| eyre!("method not found: {name}{descriptor}"))?;
+
+                if method.access_flags.contains(MethodAccessFlags::NATIVE) && name == "print" {
                     let arg = operand_stack.pop().wrap_err("missing argument to print")?;
                     match arg {
                         Operand::Byte(v) => print!("{v}"),
@@ -178,18 +186,13 @@ fn execute_method(class: &Class, method_name: &str, method_descriptor: &str) -> 
             }
             Instruction::ldc { index } => {
                 match &class.constant_pool()[*index] {
-                    ConstantInfo::Utf8(_) => todo!(),
-                    ConstantInfo::Class(_) => todo!(),
                     ConstantInfo::String(constant_pool::String { string_index }) => operand_stack
                         .push(Operand::StringConst(
                             class.constant_pool()[*string_index]
                                 .try_as_utf_8_ref()
                                 .wrap_err("expected utf8")?,
                         )),
-                    ConstantInfo::MethodRef(_) => todo!(),
-                    ConstantInfo::NameAndType(_) => todo!(),
-                    ConstantInfo::MethodHandle => todo!(),
-                    ConstantInfo::InvokeDynamic(_) => todo!(),
+                    _ => todo!(),
                 };
                 pc += 1;
             }
