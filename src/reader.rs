@@ -1,15 +1,21 @@
-use std::io::{self, Cursor};
+use std::io::{self, Cursor, Seek};
+use std::num::NonZeroU8;
 
 use byteorder::{BigEndian, ReadBytesExt};
-use color_eyre::eyre::{self, bail, Context};
+use color_eyre::eyre::{self, bail, eyre, Context, ContextCompat};
 
 use crate::class_file::constant_pool::{self, ConstantInfo, ConstantPool};
 use crate::class_file::{
     AttributeInfo, BootstrapMethod, BootstrapMethodsAttribute, ClassAccessFlags, ClassFile,
     CodeAttribute, CustomAttribute, ExceptionTableEntry, FieldAccessFlags, FieldInfo, InnerClass,
-    InnerClassAccessFlags, InnerClassesAttribute, Instruction, LineNumberTableAttribute,
-    LineNumberTableEntry, MethodAccessFlags, MethodInfo, SourceFileAttribute,
+    InnerClassAccessFlags, InnerClassesAttribute, LineNumberTableAttribute, LineNumberTableEntry,
+    MethodAccessFlags, MethodInfo, SourceFileAttribute,
 };
+use crate::instructions::{
+    ArrayLoadStoreType, Condition, EqCondition, Instruction, IntegerType, InvokeKind, NumberType,
+    OrdCondition, ReturnType,
+};
+use crate::opcodes::OpCode;
 
 pub struct ClassReader<R>(R);
 
@@ -202,11 +208,15 @@ impl<R: io::Read> ClassReader<R> {
     }
 
     fn read_method_info(&mut self, constant_pool: &ConstantPool) -> eyre::Result<MethodInfo> {
+        let access_flags = self.read_u16()?;
+        let name_index = self.read_u16()?;
         Ok(MethodInfo {
-            access_flags: MethodAccessFlags::from_bits_truncate(self.read_u16()?),
-            name_index: self.read_u16()?,
+            access_flags: MethodAccessFlags::from_bits_truncate(access_flags),
+            name_index,
             descriptor_index: self.read_u16()?,
-            attributes: self.read_attributes(constant_pool)?,
+            attributes: self
+                .read_attributes(constant_pool)
+                .wrap_err_with(|| eyre!("failed to read attributes for method: {name_index}"))?,
         })
     }
 
@@ -264,52 +274,244 @@ impl<R: io::Read> ClassReader<R> {
                 let mut cursor = Cursor::new(&bytes);
 
                 while let Ok(opcode) = cursor.read_u8() {
+                    let opcode = OpCode::from_repr(opcode)
+                        .wrap_err_with(|| eyre!("unknown opcode: {opcode}"))?;
+
                     let instruction = match opcode {
-                        2 => Instruction::iconst { value: -1 },
-                        3 => Instruction::iconst { value: 0 },
-                        4 => Instruction::iconst { value: 1 },
-                        5 => Instruction::iconst { value: 2 },
-                        6 => Instruction::iconst { value: 3 },
-                        7 => Instruction::iconst { value: 4 },
-                        8 => Instruction::iconst { value: 5 },
-                        18 => Instruction::ldc {
-                            index: cursor.read_u8()? as u16,
-                        },
-                        19 => Instruction::ldc {
-                            index: cursor.read_u16_be()?,
-                        },
-                        20 => Instruction::ldc2 {
-                            index: cursor.read_u16_be()?,
-                        },
-                        21 => Instruction::iload {
-                            index: cursor.read_u8()?,
-                        },
-                        25 => Instruction::aload {
-                            index: cursor.read_u8()?,
-                        },
-                        26 => Instruction::iload { index: 0 },
-                        27 => Instruction::iload { index: 1 },
-                        28 => Instruction::iload { index: 2 },
-                        29 => Instruction::iload { index: 3 },
-                        42 => Instruction::aload { index: 0 },
-                        43 => Instruction::aload { index: 1 },
-                        44 => Instruction::aload { index: 2 },
-                        45 => Instruction::aload { index: 3 },
-                        54 => Instruction::istore {
-                            index: cursor.read_u8()?,
-                        },
-                        59 => Instruction::istore { index: 0 },
-                        60 => Instruction::istore { index: 1 },
-                        61 => Instruction::istore { index: 2 },
-                        62 => Instruction::istore { index: 3 },
-                        177 => Instruction::retvoid,
-                        183 => Instruction::invokespecial {
-                            index: cursor.read_u16_be()?,
-                        },
-                        184 => Instruction::invokestatic {
-                            index: cursor.read_u16_be()?,
-                        },
-                        186 => {
+                        OpCode::nop => Instruction::nop,
+                        OpCode::aconst_null => Instruction::aconst_null,
+                        OpCode::iconst_m1 => Instruction::iconst(-1),
+                        OpCode::iconst_0 => Instruction::iconst(0),
+                        OpCode::iconst_1 => Instruction::iconst(1),
+                        OpCode::iconst_2 => Instruction::iconst(2),
+                        OpCode::iconst_3 => Instruction::iconst(3),
+                        OpCode::iconst_4 => Instruction::iconst(4),
+                        OpCode::iconst_5 => Instruction::iconst(5),
+                        OpCode::lconst_0 => Instruction::lconst(0),
+                        OpCode::lconst_1 => Instruction::lconst(1),
+                        OpCode::fconst_0 => Instruction::fconst(0),
+                        OpCode::fconst_1 => Instruction::fconst(1),
+                        OpCode::fconst_2 => Instruction::fconst(2),
+                        OpCode::dconst_0 => Instruction::dconst(0),
+                        OpCode::dconst_1 => Instruction::dconst(1),
+                        OpCode::bipush => Instruction::bipush(cursor.read_i8()?),
+                        OpCode::sipush => Instruction::sipush(cursor.read_i16_be()?),
+                        OpCode::ldc => Instruction::ldc(cursor.read_u8()? as u16),
+                        OpCode::ldc_w => Instruction::ldc(cursor.read_u16_be()?),
+                        OpCode::ldc2_w => Instruction::ldc2(cursor.read_u16_be()?),
+                        OpCode::iload => Instruction::iload(cursor.read_u8()?),
+                        OpCode::lload => Instruction::lload(cursor.read_u8()?),
+                        OpCode::fload => Instruction::fload(cursor.read_u8()?),
+                        OpCode::dload => Instruction::dload(cursor.read_u8()?),
+                        OpCode::aload => Instruction::aload(cursor.read_u8()?),
+                        OpCode::iload_0 => Instruction::iload(0),
+                        OpCode::iload_1 => Instruction::iload(1),
+                        OpCode::iload_2 => Instruction::iload(2),
+                        OpCode::iload_3 => Instruction::iload(3),
+                        OpCode::lload_0 => Instruction::lload(0),
+                        OpCode::lload_1 => Instruction::lload(1),
+                        OpCode::lload_2 => Instruction::lload(2),
+                        OpCode::lload_3 => Instruction::lload(3),
+                        OpCode::fload_0 => Instruction::fload(0),
+                        OpCode::fload_1 => Instruction::fload(1),
+                        OpCode::fload_2 => Instruction::fload(2),
+                        OpCode::fload_3 => Instruction::fload(3),
+                        OpCode::dload_0 => Instruction::dload(0),
+                        OpCode::dload_1 => Instruction::dload(1),
+                        OpCode::dload_2 => Instruction::dload(2),
+                        OpCode::dload_3 => Instruction::dload(3),
+                        OpCode::aload_0 => Instruction::aload(0),
+                        OpCode::aload_1 => Instruction::aload(1),
+                        OpCode::aload_2 => Instruction::aload(2),
+                        OpCode::aload_3 => Instruction::aload(3),
+                        OpCode::iaload => Instruction::arraystore(ArrayLoadStoreType::Int),
+                        OpCode::laload => Instruction::arraystore(ArrayLoadStoreType::Long),
+                        OpCode::faload => Instruction::arraystore(ArrayLoadStoreType::Float),
+                        OpCode::daload => Instruction::arraystore(ArrayLoadStoreType::Double),
+                        OpCode::aaload => Instruction::arraystore(ArrayLoadStoreType::Reference),
+                        OpCode::baload => Instruction::arraystore(ArrayLoadStoreType::Byte),
+                        OpCode::caload => Instruction::arraystore(ArrayLoadStoreType::Char),
+                        OpCode::saload => Instruction::arraystore(ArrayLoadStoreType::Short),
+                        OpCode::istore => Instruction::istore(cursor.read_u8()?),
+                        OpCode::lstore => Instruction::lstore(cursor.read_u8()?),
+                        OpCode::fstore => Instruction::fstore(cursor.read_u8()?),
+                        OpCode::dstore => Instruction::dstore(cursor.read_u8()?),
+                        OpCode::astore => Instruction::astore(cursor.read_u8()?),
+                        OpCode::istore_0 => Instruction::istore(0),
+                        OpCode::istore_1 => Instruction::istore(1),
+                        OpCode::istore_2 => Instruction::istore(2),
+                        OpCode::istore_3 => Instruction::istore(3),
+                        OpCode::lstore_0 => Instruction::lstore(0),
+                        OpCode::lstore_1 => Instruction::lstore(1),
+                        OpCode::lstore_2 => Instruction::lstore(2),
+                        OpCode::lstore_3 => Instruction::lstore(3),
+                        OpCode::fstore_0 => Instruction::fstore(0),
+                        OpCode::fstore_1 => Instruction::fstore(1),
+                        OpCode::fstore_2 => Instruction::fstore(2),
+                        OpCode::fstore_3 => Instruction::fstore(3),
+                        OpCode::dstore_0 => Instruction::dstore(0),
+                        OpCode::dstore_1 => Instruction::dstore(1),
+                        OpCode::dstore_2 => Instruction::dstore(2),
+                        OpCode::dstore_3 => Instruction::dstore(3),
+                        OpCode::astore_0 => Instruction::astore(0),
+                        OpCode::astore_1 => Instruction::astore(1),
+                        OpCode::astore_2 => Instruction::astore(2),
+                        OpCode::astore_3 => Instruction::astore(3),
+                        OpCode::iastore => Instruction::arraystore(ArrayLoadStoreType::Int),
+                        OpCode::lastore => Instruction::arraystore(ArrayLoadStoreType::Long),
+                        OpCode::fastore => Instruction::arraystore(ArrayLoadStoreType::Float),
+                        OpCode::dastore => Instruction::arraystore(ArrayLoadStoreType::Double),
+                        OpCode::aastore => Instruction::arraystore(ArrayLoadStoreType::Reference),
+                        OpCode::bastore => Instruction::arraystore(ArrayLoadStoreType::Byte),
+                        OpCode::castore => Instruction::arraystore(ArrayLoadStoreType::Char),
+                        OpCode::sastore => Instruction::arraystore(ArrayLoadStoreType::Short),
+                        OpCode::pop => Instruction::pop,
+                        OpCode::pop2 => Instruction::pop2,
+                        OpCode::dup => Instruction::dup,
+                        OpCode::dup_x1 => Instruction::dup_x1,
+                        OpCode::dup_x2 => Instruction::dup_x2,
+                        OpCode::dup2 => Instruction::dup2,
+                        OpCode::dup2_x1 => Instruction::dup2_x1,
+                        OpCode::dup2_x2 => Instruction::dup2_x2,
+                        OpCode::swap => Instruction::swap,
+                        OpCode::iadd => Instruction::add(NumberType::Int),
+                        OpCode::ladd => Instruction::add(NumberType::Long),
+                        OpCode::fadd => Instruction::add(NumberType::Float),
+                        OpCode::dadd => Instruction::add(NumberType::Double),
+                        OpCode::isub => Instruction::sub(NumberType::Int),
+                        OpCode::lsub => Instruction::sub(NumberType::Long),
+                        OpCode::fsub => Instruction::sub(NumberType::Float),
+                        OpCode::dsub => Instruction::sub(NumberType::Double),
+                        OpCode::imul => Instruction::mul(NumberType::Int),
+                        OpCode::lmul => Instruction::mul(NumberType::Long),
+                        OpCode::fmul => Instruction::mul(NumberType::Float),
+                        OpCode::dmul => Instruction::mul(NumberType::Double),
+                        OpCode::idiv => Instruction::div(NumberType::Int),
+                        OpCode::ldiv => Instruction::div(NumberType::Long),
+                        OpCode::fdiv => Instruction::div(NumberType::Float),
+                        OpCode::ddiv => Instruction::div(NumberType::Double),
+                        OpCode::irem => Instruction::rem(NumberType::Int),
+                        OpCode::lrem => Instruction::rem(NumberType::Long),
+                        OpCode::frem => Instruction::rem(NumberType::Float),
+                        OpCode::drem => Instruction::rem(NumberType::Double),
+                        OpCode::ineg => Instruction::neg(NumberType::Int),
+                        OpCode::lneg => Instruction::neg(NumberType::Long),
+                        OpCode::fneg => Instruction::neg(NumberType::Float),
+                        OpCode::dneg => Instruction::neg(NumberType::Double),
+                        OpCode::ishl => Instruction::shl(IntegerType::Int),
+                        OpCode::lshl => Instruction::shl(IntegerType::Long),
+                        OpCode::ishr => Instruction::shr(IntegerType::Int),
+                        OpCode::lshr => Instruction::shr(IntegerType::Long),
+                        OpCode::iushr => Instruction::ushr(IntegerType::Int),
+                        OpCode::lushr => Instruction::ushr(IntegerType::Long),
+                        OpCode::iand => Instruction::and(IntegerType::Int),
+                        OpCode::land => Instruction::and(IntegerType::Long),
+                        OpCode::ior => Instruction::or(IntegerType::Int),
+                        OpCode::lor => Instruction::or(IntegerType::Long),
+                        OpCode::ixor => Instruction::xor(IntegerType::Int),
+                        OpCode::lxor => Instruction::xor(IntegerType::Long),
+                        OpCode::iinc => Instruction::inc(cursor.read_u8()?, cursor.read_i8()?),
+                        OpCode::i2l => Instruction::i2l,
+                        OpCode::i2f => Instruction::i2f,
+                        OpCode::i2d => Instruction::i2d,
+                        OpCode::l2i => Instruction::l2i,
+                        OpCode::l2f => Instruction::l2f,
+                        OpCode::l2d => Instruction::l2d,
+                        OpCode::f2i => Instruction::f2i,
+                        OpCode::f2l => Instruction::f2l,
+                        OpCode::f2d => Instruction::f2d,
+                        OpCode::d2i => Instruction::d2i,
+                        OpCode::d2l => Instruction::d2l,
+                        OpCode::d2f => Instruction::d2f,
+                        OpCode::i2b => Instruction::i2b,
+                        OpCode::i2c => Instruction::i2c,
+                        OpCode::i2s => Instruction::i2s,
+                        OpCode::lcmp => Instruction::lcmp,
+                        OpCode::fcmpl => Instruction::fcmp(OrdCondition::Lt),
+                        OpCode::fcmpg => Instruction::fcmp(OrdCondition::Gt),
+                        OpCode::dcmpl => Instruction::dcmp(OrdCondition::Lt),
+                        OpCode::dcmpg => Instruction::dcmp(OrdCondition::Gt),
+                        OpCode::ifeq => Instruction::r#if(Condition::Eq, cursor.read_u16_be()?),
+                        OpCode::ifne => Instruction::r#if(Condition::Ne, cursor.read_u16_be()?),
+                        OpCode::iflt => Instruction::r#if(Condition::Lt, cursor.read_u16_be()?),
+                        OpCode::ifge => Instruction::r#if(Condition::Ge, cursor.read_u16_be()?),
+                        OpCode::ifgt => Instruction::r#if(Condition::Gt, cursor.read_u16_be()?),
+                        OpCode::ifle => Instruction::r#if(Condition::Le, cursor.read_u16_be()?),
+                        OpCode::if_icmpeq => {
+                            Instruction::if_icmp(Condition::Eq, cursor.read_u16_be()?)
+                        }
+                        OpCode::if_icmpne => {
+                            Instruction::if_icmp(Condition::Ne, cursor.read_u16_be()?)
+                        }
+                        OpCode::if_icmplt => {
+                            Instruction::if_icmp(Condition::Lt, cursor.read_u16_be()?)
+                        }
+                        OpCode::if_icmpge => {
+                            Instruction::if_icmp(Condition::Ge, cursor.read_u16_be()?)
+                        }
+                        OpCode::if_icmpgt => {
+                            Instruction::if_icmp(Condition::Gt, cursor.read_u16_be()?)
+                        }
+                        OpCode::if_icmple => {
+                            Instruction::if_icmp(Condition::Le, cursor.read_u16_be()?)
+                        }
+                        OpCode::if_acmpeq => {
+                            Instruction::if_acmp(EqCondition::Eq, cursor.read_u16_be()?)
+                        }
+                        OpCode::if_acmpne => {
+                            Instruction::if_acmp(EqCondition::Ne, cursor.read_u16_be()?)
+                        }
+                        OpCode::goto => Instruction::goto(cursor.read_u16_be()? as u32),
+                        OpCode::jsr => Instruction::jsr(cursor.read_u16_be()? as u32),
+                        OpCode::ret => Instruction::ret(cursor.read_u8()?),
+                        OpCode::tableswitch => {
+                            cursor.align_to(4);
+                            let _default = cursor.read_i32_be()?;
+                            let low = cursor.read_i32_be()?;
+                            let high = cursor.read_i32_be()?;
+                            let count = high - low + 1;
+                            cursor.set_position(cursor.position() + count as u64 * 4);
+                            Instruction::tableswitch {}
+                        }
+                        OpCode::lookupswitch => {
+                            cursor.align_to(4);
+                            let _default = cursor.read_i32_be()?;
+                            let npairs = cursor.read_i32_be()?;
+                            cursor.set_position(cursor.position() + npairs as u64 * 8);
+                            Instruction::lookupswitch {}
+                        }
+                        OpCode::ireturn => Instruction::r#return(ReturnType::Int),
+                        OpCode::lreturn => Instruction::r#return(ReturnType::Long),
+                        OpCode::freturn => Instruction::r#return(ReturnType::Float),
+                        OpCode::dreturn => Instruction::r#return(ReturnType::Double),
+                        OpCode::areturn => Instruction::r#return(ReturnType::Reference),
+                        OpCode::r#return => Instruction::r#return(ReturnType::Void),
+                        OpCode::getfield => Instruction::getfield(cursor.read_u16_be()?),
+                        OpCode::putfield => Instruction::putfield(cursor.read_u16_be()?),
+                        OpCode::getstatic => Instruction::getstatic(cursor.read_u16_be()?),
+                        OpCode::putstatic => Instruction::putstatic(cursor.read_u16_be()?),
+                        OpCode::invokevirtual => {
+                            Instruction::invoke(InvokeKind::Virtual, cursor.read_u16_be()?)
+                        }
+                        OpCode::invokespecial => {
+                            Instruction::invoke(InvokeKind::Special, cursor.read_u16_be()?)
+                        }
+                        OpCode::invokestatic => {
+                            Instruction::invoke(InvokeKind::Static, cursor.read_u16_be()?)
+                        }
+                        OpCode::invokeinterface => {
+                            let index = cursor.read_u16_be()?;
+                            let count = NonZeroU8::new(cursor.read_u8()?)
+                                .wrap_err("invokeinterface count must not be 0")?;
+                            let zero = cursor.read_u8()?;
+                            if zero != 0 {
+                                bail!(
+                                    "invalid bytes found in invokeinterface instruction: 0x{zero:0x}"
+                                );
+                            }
+                            Instruction::invoke(InvokeKind::Interface { count }, index)
+                        }
+                        OpCode::invokedynamic => {
                             let index = cursor.read_u16_be()?;
                             let zero = cursor.read_u16_be()?;
                             if zero != 0 {
@@ -317,9 +519,28 @@ impl<R: io::Read> ClassReader<R> {
                                     "invalid bytes found in invokedynamic instruction: 0x{zero:0x}"
                                 );
                             }
-                            Instruction::invokedynamic { index }
+                            Instruction::invoke(InvokeKind::Dynamic, index)
                         }
-                        _ => bail!("unknown opcode: {opcode}"),
+                        OpCode::new => Instruction::new(cursor.read_u16_be()?),
+                        OpCode::newarray => Instruction::newarray(cursor.read_u8()?),
+                        OpCode::anewarray => Instruction::anewarray(cursor.read_u16_be()?),
+                        OpCode::arraylength => Instruction::arraylength,
+                        OpCode::athrow => Instruction::athrow,
+                        OpCode::checkcast => Instruction::checkcast(cursor.read_u16_be()?),
+                        OpCode::instanceof => Instruction::instanceof(cursor.read_u16_be()?),
+                        OpCode::monitorenter => Instruction::monitorenter,
+                        OpCode::monitorexit => Instruction::monitorexit,
+                        OpCode::wide => todo!(),
+                        OpCode::multianewarray => {
+                            Instruction::multianewarray(cursor.read_u16_be()?, cursor.read_u8()?)
+                        }
+                        OpCode::ifnull => Instruction::ifnull(cursor.read_u16_be()?),
+                        OpCode::ifnonnull => Instruction::ifnonnull(cursor.read_u16_be()?),
+                        OpCode::goto_w => Instruction::goto(cursor.read_u32_be()?),
+                        OpCode::jsr_w => Instruction::jsr(cursor.read_u32_be()?),
+                        OpCode::breakpoint | OpCode::impdep1 | OpCode::impdep2 => {
+                            bail!("unexpected opcode: {opcode:?}")
+                        }
                     };
                     instructions.push(instruction);
                 }
@@ -425,10 +646,42 @@ impl<R: io::Read> ClassReader<R> {
 
 trait EndianReadExt {
     fn read_u16_be(&mut self) -> io::Result<u16>;
+    fn read_i16_be(&mut self) -> io::Result<i16>;
+    fn read_u32_be(&mut self) -> io::Result<u32>;
+    fn read_i32_be(&mut self) -> io::Result<i32>;
 }
 
 impl<R: io::Read> EndianReadExt for R {
     fn read_u16_be(&mut self) -> io::Result<u16> {
         self.read_u16::<BigEndian>()
+    }
+
+    fn read_i16_be(&mut self) -> io::Result<i16> {
+        self.read_i16::<BigEndian>()
+    }
+
+    fn read_u32_be(&mut self) -> io::Result<u32> {
+        self.read_u32::<BigEndian>()
+    }
+
+    fn read_i32_be(&mut self) -> io::Result<i32> {
+        self.read_i32::<BigEndian>()
+    }
+}
+
+trait Align {
+    fn align_to(&mut self, align: u64);
+}
+
+impl<T> Align for Cursor<T>
+where
+    Self: io::Seek,
+{
+    fn align_to(&mut self, align: u64) {
+        let pos = self.position();
+        let offset = pos % align;
+        if offset != 0 {
+            self.set_position(pos + align - offset);
+        }
     }
 }

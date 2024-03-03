@@ -5,7 +5,8 @@ use clap::Parser;
 use color_eyre::eyre::{self, bail, eyre, Context, ContextCompat};
 use rusty_java::class::Class;
 use rusty_java::class_file::constant_pool::{self, ConstantInfo};
-use rusty_java::class_file::{AttributeInfo, Instruction, MethodAccessFlags};
+use rusty_java::class_file::{AttributeInfo, MethodAccessFlags};
+use rusty_java::instructions::{Instruction, InvokeKind, LoadStoreType, ReturnType};
 use rusty_java::reader::ClassReader;
 
 #[derive(clap::Parser)]
@@ -87,17 +88,20 @@ fn execute_method(class: &Class, method_name: &str, method_descriptor: &str) -> 
     loop {
         let instruction = &code[pc];
         match instruction {
-            Instruction::aload { index } => todo!(),
-            Instruction::invokespecial { index } => todo!(),
-            Instruction::retvoid => {
+            Instruction::r#return {
+                data_type: ReturnType::Void,
+            } => {
                 // TODO: synchronized methods
                 break;
             }
-            Instruction::iconst { value } => {
+            Instruction::r#const { data_type, value } => {
                 operand_stack.push(Operand::Byte(*value));
                 pc += 1;
             }
-            Instruction::istore { index } => {
+            Instruction::store {
+                data_type: LoadStoreType::Int,
+                index,
+            } => {
                 let operand = operand_stack
                     .pop()
                     .wrap_err("no operand provided to istore")?;
@@ -117,7 +121,10 @@ fn execute_method(class: &Class, method_name: &str, method_descriptor: &str) -> 
 
                 pc += 1;
             }
-            Instruction::iload { index } => {
+            Instruction::load {
+                data_type: LoadStoreType::Int,
+                index,
+            } => {
                 let val = match locals[*index as usize] {
                     Local::None => 0,
                     Local::Int(v) => v,
@@ -129,7 +136,10 @@ fn execute_method(class: &Class, method_name: &str, method_descriptor: &str) -> 
 
                 pc += 1;
             }
-            Instruction::invokedynamic { index } => {
+            Instruction::invoke {
+                kind: InvokeKind::Dynamic,
+                index,
+            } => {
                 let invoke_dynamic = &class.constant_pool()[*index]
                     .try_as_invoke_dynamic_ref()
                     .wrap_err("invalid operand for invokedynamic")?;
@@ -144,7 +154,10 @@ fn execute_method(class: &Class, method_name: &str, method_descriptor: &str) -> 
 
                 panic!("exec {name}");
             }
-            Instruction::invokestatic { index } => {
+            Instruction::invoke {
+                kind: InvokeKind::Static,
+                index,
+            } => {
                 let invoke_dynamic = &class.constant_pool()[*index]
                     .try_as_method_ref_ref()
                     .wrap_err("expected methodref")?;
@@ -196,7 +209,7 @@ fn execute_method(class: &Class, method_name: &str, method_descriptor: &str) -> 
                 };
                 pc += 1;
             }
-            Instruction::ldc2 { index } => todo!(),
+            _ => todo!("unimplemented instruction: {instruction:?}"),
         }
     }
 

@@ -1,5 +1,7 @@
 use bitflags::bitflags;
 
+use crate::instructions::Instruction;
+
 use self::constant_pool::ConstantPool;
 
 #[derive(Debug)]
@@ -203,21 +205,6 @@ pub struct CodeAttribute {
     pub code: Vec<Instruction>,
     pub exception_table: Vec<ExceptionTableEntry>,
     pub attributes: Vec<AttributeInfo>,
-}
-
-#[allow(non_camel_case_types)]
-#[derive(Debug)]
-pub enum Instruction {
-    aload { index: u8 },
-    invokespecial { index: u16 },
-    retvoid,
-    iconst { value: i8 },
-    istore { index: u8 },
-    iload { index: u8 },
-    invokedynamic { index: u16 },
-    invokestatic { index: u16 },
-    ldc { index: u16 },
-    ldc2 { index: u16 },
 }
 
 #[derive(Debug)]
