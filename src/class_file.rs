@@ -40,13 +40,24 @@ pub mod constant_pool {
 
     #[derive(Debug, EnumTryAs)]
     pub enum ConstantInfo {
+        Unused,
         Utf8(std::string::String),
+        Integer(i32),
+        Float(f32),
+        Long(i64),
+        Double(f64),
         Class(Class),
         String(String),
+        FieldRef(FieldRef),
         MethodRef(MethodRef),
+        InterfaceMethodRef(MethodRef),
         NameAndType(NameAndType),
-        MethodHandle,
+        MethodHandle(MethodHandle),
+        MethodType(MethodType),
+        Dynamic(Dynamic),
         InvokeDynamic(InvokeDynamic),
+        Module(Module),
+        Package(Package),
     }
 
     #[derive(Debug)]
@@ -57,6 +68,12 @@ pub mod constant_pool {
     #[derive(Debug)]
     pub struct String {
         pub string_index: u16,
+    }
+
+    #[derive(Debug)]
+    pub struct FieldRef {
+        pub class_index: u16,
+        pub name_and_type_index: u16,
     }
 
     #[derive(Debug)]
@@ -72,9 +89,36 @@ pub mod constant_pool {
     }
 
     #[derive(Debug)]
+    pub struct MethodHandle {
+        pub reference_kind: u8,
+        pub reference_index: u16,
+    }
+
+    #[derive(Debug)]
+    pub struct MethodType {
+        pub descriptor_index: u16,
+    }
+
+    #[derive(Debug)]
+    pub struct Dynamic {
+        pub bootstrap_method_attr_index: u16,
+        pub name_and_type_index: u16,
+    }
+
+    #[derive(Debug)]
     pub struct InvokeDynamic {
         pub bootstrap_method_attr_index: u16,
         pub name_and_type_index: u16,
+    }
+
+    #[derive(Debug)]
+    pub struct Module {
+        pub name_index: u16,
+    }
+
+    #[derive(Debug)]
+    pub struct Package {
+        pub name_index: u16,
     }
 }
 
@@ -95,10 +139,25 @@ bitflags! {
 
 #[derive(Debug)]
 pub struct FieldInfo {
-    pub access_flags: u16,
+    pub access_flags: FieldAccessFlags,
     pub name_index: u16,
     pub descriptor_index: u16,
     pub attributes: Vec<AttributeInfo>,
+}
+
+bitflags! {
+    #[derive(Debug)]
+    pub struct FieldAccessFlags: u16 {
+        const PUBLIC = 0x0001;
+        const PRIVATE = 0x0002;
+        const PROTECTED = 0x0004;
+        const STATIC = 0x0008;
+        const FINAL = 0x0010;
+        const VOLATILE = 0x0040;
+        const TRANSIENT = 0x0080;
+        const SYNTHETIC = 0x1000;
+        const ENUM = 0x4000;
+    }
 }
 
 #[derive(Debug)]

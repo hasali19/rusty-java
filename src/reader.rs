@@ -6,7 +6,7 @@ use color_eyre::eyre::{self, bail, Context};
 use crate::class_file::constant_pool::{self, ConstantInfo, ConstantPool};
 use crate::class_file::{
     AttributeInfo, BootstrapMethod, BootstrapMethodsAttribute, ClassAccessFlags, ClassFile,
-    CodeAttribute, CustomAttribute, ExceptionTableEntry, FieldInfo, InnerClass,
+    CodeAttribute, CustomAttribute, ExceptionTableEntry, FieldAccessFlags, FieldInfo, InnerClass,
     InnerClassAccessFlags, InnerClassesAttribute, Instruction, LineNumberTableAttribute,
     LineNumberTableEntry, MethodAccessFlags, MethodInfo, SourceFileAttribute,
 };
@@ -31,7 +31,7 @@ impl<R: io::Read> ClassReader<R> {
         let this_class = self.read_u16()?;
         let super_class = self.read_u16()?;
         let interfaces = self.read_interfaces()?;
-        let fields = self.read_fields()?;
+        let fields = self.read_fields(&constant_pool)?;
         let methods = self.read_methods(&constant_pool)?;
         let attributes = self.read_attributes(&constant_pool)?;
 
@@ -52,23 +52,41 @@ impl<R: io::Read> ClassReader<R> {
     fn read_constant_pool(&mut self) -> eyre::Result<ConstantPool> {
         let constant_pool_count = self.read_u16()?;
         let mut constant_pool = vec![];
-        for _ in 0..constant_pool_count - 1 {
+        let mut i = 1;
+        while i < constant_pool_count {
             let tag = self.read_u8()?;
             let constant = match tag {
                 1 => ConstantInfo::Utf8(self.read_utf8()?),
+                3 => ConstantInfo::Integer(self.read_u32()? as i32),
+                4 => ConstantInfo::Float(f32::from_bits(self.read_u32()?)),
+                5 => ConstantInfo::Long(self.read_u64()? as i64),
+                6 => ConstantInfo::Double(f64::from_bits(self.read_u64()?)),
                 7 => ConstantInfo::Class(self.read_class_info()?),
                 8 => ConstantInfo::String(self.read_string_info()?),
+                9 => ConstantInfo::FieldRef(self.read_fieldref_info()?),
                 10 => ConstantInfo::MethodRef(self.read_methodref_info()?),
+                11 => ConstantInfo::InterfaceMethodRef(self.read_methodref_info()?),
                 12 => ConstantInfo::NameAndType(self.read_name_and_type_info()?),
-                15 => {
-                    // TODO: Read fields
-                    self.skip(3)?;
-                    ConstantInfo::MethodHandle
-                }
+                15 => ConstantInfo::MethodHandle(self.read_method_handle_info()?),
+                16 => ConstantInfo::MethodType(self.read_method_type_info()?),
+                17 => ConstantInfo::Dynamic(self.read_dynamic_info()?),
                 18 => ConstantInfo::InvokeDynamic(self.read_invoke_dynamic_info()?),
+                19 => ConstantInfo::Module(self.read_module_info()?),
+                20 => ConstantInfo::Package(self.read_package_info()?),
                 _ => bail!("unknown constant pool tag: {tag}"),
             };
+
             constant_pool.push(constant);
+
+            // Java made the rather poor choice of having longs and doubles take up two indexes
+            // in the constant pool, so we have to write this ugly loop to increment by 2 and add
+            // a dummy entry to the constant pool.
+            if [5, 6].contains(&tag) {
+                i += 2;
+                constant_pool.push(ConstantInfo::Unused);
+            } else {
+                i += 1;
+            }
         }
         Ok(ConstantPool(constant_pool))
     }
@@ -92,6 +110,13 @@ impl<R: io::Read> ClassReader<R> {
         })
     }
 
+    fn read_fieldref_info(&mut self) -> eyre::Result<constant_pool::FieldRef> {
+        Ok(constant_pool::FieldRef {
+            class_index: self.read_u16()?,
+            name_and_type_index: self.read_u16()?,
+        })
+    }
+
     fn read_methodref_info(&mut self) -> eyre::Result<constant_pool::MethodRef> {
         Ok(constant_pool::MethodRef {
             class_index: self.read_u16()?,
@@ -106,10 +131,42 @@ impl<R: io::Read> ClassReader<R> {
         })
     }
 
+    fn read_method_handle_info(&mut self) -> eyre::Result<constant_pool::MethodHandle> {
+        Ok(constant_pool::MethodHandle {
+            reference_kind: self.read_u8()?,
+            reference_index: self.read_u16()?,
+        })
+    }
+
+    fn read_method_type_info(&mut self) -> eyre::Result<constant_pool::MethodType> {
+        Ok(constant_pool::MethodType {
+            descriptor_index: self.read_u16()?,
+        })
+    }
+
+    fn read_dynamic_info(&mut self) -> eyre::Result<constant_pool::Dynamic> {
+        Ok(constant_pool::Dynamic {
+            bootstrap_method_attr_index: self.read_u16()?,
+            name_and_type_index: self.read_u16()?,
+        })
+    }
+
     fn read_invoke_dynamic_info(&mut self) -> eyre::Result<constant_pool::InvokeDynamic> {
         Ok(constant_pool::InvokeDynamic {
             bootstrap_method_attr_index: self.read_u16()?,
             name_and_type_index: self.read_u16()?,
+        })
+    }
+
+    fn read_module_info(&mut self) -> eyre::Result<constant_pool::Module> {
+        Ok(constant_pool::Module {
+            name_index: self.read_u16()?,
+        })
+    }
+
+    fn read_package_info(&mut self) -> eyre::Result<constant_pool::Package> {
+        Ok(constant_pool::Package {
+            name_index: self.read_u16()?,
         })
     }
 
@@ -121,13 +178,20 @@ impl<R: io::Read> ClassReader<R> {
             .wrap_err("failed to read interfaces")
     }
 
-    fn read_fields(&mut self) -> eyre::Result<Vec<FieldInfo>> {
+    fn read_fields(&mut self, constant_pool: &ConstantPool) -> eyre::Result<Vec<FieldInfo>> {
         let fields_count = self.read_u16()?;
-        (0..fields_count).map(|_| self.read_field_info()).collect()
+        (0..fields_count)
+            .map(|_| self.read_field_info(constant_pool))
+            .collect()
     }
 
-    fn read_field_info(&mut self) -> eyre::Result<FieldInfo> {
-        todo!()
+    fn read_field_info(&mut self, constant_pool: &ConstantPool) -> eyre::Result<FieldInfo> {
+        Ok(FieldInfo {
+            access_flags: FieldAccessFlags::from_bits_truncate(self.read_u16()?),
+            name_index: self.read_u16()?,
+            descriptor_index: self.read_u16()?,
+            attributes: self.read_attributes(constant_pool)?,
+        })
     }
 
     fn read_methods(&mut self, constant_pool: &ConstantPool) -> eyre::Result<Vec<MethodInfo>> {
@@ -354,11 +418,8 @@ impl<R: io::Read> ClassReader<R> {
         self.0.read_u32::<BigEndian>()
     }
 
-    fn skip(&mut self, n: usize) -> io::Result<()> {
-        for _ in 0..n {
-            self.read_u8()?;
-        }
-        Ok(())
+    fn read_u64(&mut self) -> io::Result<u64> {
+        self.0.read_u64::<BigEndian>()
     }
 }
 
