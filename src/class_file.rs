@@ -2,8 +2,6 @@ use bitflags::bitflags;
 use bumpalo::collections::Vec;
 use strum::EnumTryAs;
 
-use crate::instructions::Instruction;
-
 use self::constant_pool::ConstantPool;
 
 #[derive(Debug)]
@@ -204,7 +202,7 @@ pub enum AttributeInfo<'a> {
 pub struct CodeAttribute<'a> {
     pub max_stack: u16,
     pub max_locals: u16,
-    pub code: Vec<'a, Instruction>,
+    pub code: Vec<'a, u8>,
     pub exception_table: Vec<'a, ExceptionTableEntry>,
     pub attributes: Vec<'a, AttributeInfo<'a>>,
 }
