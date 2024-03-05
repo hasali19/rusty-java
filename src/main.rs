@@ -1,6 +1,7 @@
 use std::fs::File;
 use std::io::BufReader;
 
+use bumpalo::Bump;
 use clap::Parser;
 use color_eyre::eyre::{self, bail, eyre, Context, ContextCompat};
 use rusty_java::class::Class;
@@ -20,12 +21,13 @@ fn main() -> eyre::Result<()> {
     color_eyre::install()?;
 
     let args = Args::parse();
+    let arena = Bump::new();
 
-    let class_file = ClassReader::new(BufReader::new(File::open(&args.class_file)?))
+    let class_file = ClassReader::new(&arena, BufReader::new(File::open(&args.class_file)?))
         .read_class_file()
         .wrap_err_with(|| eyre!("failed to read class file at '{}'", args.class_file))?;
 
-    let class = Class::new(&class_file)?;
+    let class = Class::new(&arena, &class_file)?;
 
     if args.dump {
         println!("{class:#?}");

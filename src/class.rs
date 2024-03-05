@@ -1,25 +1,26 @@
-use std::collections::HashMap;
 use std::fmt::Debug;
 
+use bumpalo::Bump;
 use color_eyre::eyre::{self, ContextCompat};
+use hashbrown::hash_map::DefaultHashBuilder;
+use hashbrown::HashMap;
 
 use crate::class_file::constant_pool::ConstantPool;
 use crate::class_file::{ClassFile, MethodInfo};
 
 #[derive(Debug)]
 pub struct Class<'a> {
-    class_file: &'a ClassFile,
-    methods: HashMap<MethodId<'a>, &'a MethodInfo>,
+    class_file: &'a ClassFile<'a>,
+    methods: HashMap<MethodId<'a>, &'a MethodInfo<'a>, DefaultHashBuilder, &'a Bump>,
 }
 
 impl<'a> Class<'a> {
-    pub fn new(class_file: &'a ClassFile) -> eyre::Result<Class> {
+    pub fn new(arena: &'a Bump, class_file: &'a ClassFile) -> eyre::Result<Class<'a>> {
         Ok(Class {
             class_file,
-            methods: class_file
-                .methods
-                .iter()
-                .map(|method| -> eyre::Result<_> {
+            methods: {
+                let mut methods = HashMap::new_in(arena);
+                for method in &class_file.methods {
                     let name = class_file
                         .constant_pool
                         .get(method.name_index)
@@ -34,9 +35,10 @@ impl<'a> Class<'a> {
                         .try_as_utf_8_ref()
                         .wrap_err("invalid method descriptor in constant pool")?;
 
-                    Ok((MethodId { name, descriptor }, method))
-                })
-                .collect::<eyre::Result<HashMap<_, _>>>()?,
+                    methods.insert(MethodId { name, descriptor }, method);
+                }
+                methods
+            },
         })
     }
 

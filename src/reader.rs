@@ -1,6 +1,8 @@
-use std::io::{self, Cursor, Seek};
+use std::io::{self, Cursor};
 use std::num::NonZeroU8;
 
+use bumpalo::collections::{CollectIn, String, Vec};
+use bumpalo::{vec, Bump};
 use byteorder::{BigEndian, ReadBytesExt};
 use color_eyre::eyre::{self, bail, eyre, Context, ContextCompat};
 
@@ -17,14 +19,17 @@ use crate::instructions::{
 };
 use crate::opcodes::OpCode;
 
-pub struct ClassReader<R>(R);
+pub struct ClassReader<'a, R> {
+    reader: R,
+    arena: &'a Bump,
+}
 
-impl<R: io::Read> ClassReader<R> {
-    pub fn new(reader: R) -> ClassReader<R> {
-        ClassReader(reader)
+impl<'a, R: io::Read> ClassReader<'a, R> {
+    pub fn new(arena: &'a Bump, reader: R) -> ClassReader<'a, R> {
+        ClassReader { reader, arena }
     }
 
-    pub fn read_class_file(&mut self) -> eyre::Result<ClassFile> {
+    pub fn read_class_file<'b>(&'b mut self) -> eyre::Result<ClassFile<'a>> {
         let magic = self.read_u32()?;
         if magic != 0xcafebabe {
             bail!("invalid magic bytes: 0x{magic:0x}");
@@ -55,9 +60,9 @@ impl<R: io::Read> ClassReader<R> {
         })
     }
 
-    fn read_constant_pool(&mut self) -> eyre::Result<ConstantPool> {
+    fn read_constant_pool<'s>(&'s mut self) -> eyre::Result<ConstantPool<'a>> {
         let constant_pool_count = self.read_u16()?;
-        let mut constant_pool = vec![];
+        let mut constant_pool = Vec::new_in(self.arena);
         let mut i = 1;
         while i < constant_pool_count {
             let tag = self.read_u8()?;
@@ -97,11 +102,11 @@ impl<R: io::Read> ClassReader<R> {
         Ok(ConstantPool(constant_pool))
     }
 
-    fn read_utf8(&mut self) -> eyre::Result<String> {
+    fn read_utf8<'s>(&'s mut self) -> eyre::Result<String<'a>> {
         let length = self.read_u16()? as usize;
-        let mut bytes = vec![0; length];
-        self.0.read_exact(&mut bytes)?;
-        String::from_utf8(bytes).wrap_err("failed to read utf8 from constant pool")
+        let mut bytes = bumpalo::vec![in self.arena; 0; length];
+        self.reader.read_exact(&mut bytes)?;
+        String::from_utf8(bytes).map_err(|e| eyre!("{e}"))
     }
 
     fn read_class_info(&mut self) -> eyre::Result<constant_pool::Class> {
@@ -176,22 +181,27 @@ impl<R: io::Read> ClassReader<R> {
         })
     }
 
-    fn read_interfaces(&mut self) -> eyre::Result<Vec<u16>> {
+    fn read_interfaces<'s>(&'s mut self) -> eyre::Result<Vec<'a, u16>> {
         let interfaces_count = self.read_u16()?;
+        let arena = self.arena;
         (0..interfaces_count)
             .map(|_| self.read_u16())
-            .collect::<Result<_, _>>()
+            .collect_in::<Result<_, _>>(arena)
             .wrap_err("failed to read interfaces")
     }
 
-    fn read_fields(&mut self, constant_pool: &ConstantPool) -> eyre::Result<Vec<FieldInfo>> {
+    fn read_fields(
+        &mut self,
+        constant_pool: &ConstantPool,
+    ) -> eyre::Result<Vec<'a, FieldInfo<'a>>> {
         let fields_count = self.read_u16()?;
+        let arena = self.arena;
         (0..fields_count)
             .map(|_| self.read_field_info(constant_pool))
-            .collect()
+            .collect_in(arena)
     }
 
-    fn read_field_info(&mut self, constant_pool: &ConstantPool) -> eyre::Result<FieldInfo> {
+    fn read_field_info(&mut self, constant_pool: &ConstantPool) -> eyre::Result<FieldInfo<'a>> {
         Ok(FieldInfo {
             access_flags: FieldAccessFlags::from_bits_truncate(self.read_u16()?),
             name_index: self.read_u16()?,
@@ -200,14 +210,21 @@ impl<R: io::Read> ClassReader<R> {
         })
     }
 
-    fn read_methods(&mut self, constant_pool: &ConstantPool) -> eyre::Result<Vec<MethodInfo>> {
+    fn read_methods<'s, 'b>(
+        &'s mut self,
+        constant_pool: &'b ConstantPool,
+    ) -> eyre::Result<Vec<'a, MethodInfo<'a>>> {
         let methods_count = self.read_u16()?;
+        let arena = self.arena;
         (0..methods_count)
             .map(|_| self.read_method_info(constant_pool))
-            .collect()
+            .collect_in(arena)
     }
 
-    fn read_method_info(&mut self, constant_pool: &ConstantPool) -> eyre::Result<MethodInfo> {
+    fn read_method_info<'s, 'b>(
+        &'s mut self,
+        constant_pool: &'b ConstantPool,
+    ) -> eyre::Result<MethodInfo<'a>> {
         let access_flags = self.read_u16()?;
         let name_index = self.read_u16()?;
         Ok(MethodInfo {
@@ -220,17 +237,21 @@ impl<R: io::Read> ClassReader<R> {
         })
     }
 
-    fn read_attributes(
-        &mut self,
-        constant_pool: &ConstantPool,
-    ) -> eyre::Result<Vec<AttributeInfo>> {
+    fn read_attributes<'s, 'b>(
+        &'s mut self,
+        constant_pool: &'b ConstantPool,
+    ) -> eyre::Result<Vec<'a, AttributeInfo<'a>>> {
         let attributes_count = self.read_u16()?;
+        let arena = self.arena;
         (0..attributes_count)
             .map(|_| self.read_attribute_info(constant_pool))
-            .collect()
+            .collect_in(arena)
     }
 
-    fn read_attribute_info(&mut self, constant_pool: &ConstantPool) -> eyre::Result<AttributeInfo> {
+    fn read_attribute_info<'s, 'b>(
+        &'s mut self,
+        constant_pool: &'b ConstantPool,
+    ) -> eyre::Result<AttributeInfo<'a>> {
         let attribute_name_index = self.read_u16()?;
         let length = self.read_u32()? as usize;
 
@@ -251,8 +272,8 @@ impl<R: io::Read> ClassReader<R> {
             _ => AttributeInfo::Custom(CustomAttribute {
                 attribute_name_index,
                 info: {
-                    let mut bytes = vec![0; length];
-                    self.0.read_exact(&mut bytes)?;
+                    let mut bytes = vec![in self.arena; 0; length];
+                    self.reader.read_exact(&mut bytes)?;
                     bytes
                 },
             }),
@@ -261,16 +282,20 @@ impl<R: io::Read> ClassReader<R> {
         Ok(attribute_info)
     }
 
-    fn read_code_attribute(&mut self, constant_pool: &ConstantPool) -> eyre::Result<CodeAttribute> {
+    fn read_code_attribute<'s, 'b>(
+        &'s mut self,
+        constant_pool: &'b ConstantPool,
+    ) -> eyre::Result<CodeAttribute<'a>> {
+        let arena = self.arena;
         Ok(CodeAttribute {
             max_stack: self.read_u16()?,
             max_locals: self.read_u16()?,
             code: {
                 let length = self.read_u32()? as usize;
-                let mut bytes = vec![0; length];
-                self.0.read_exact(&mut bytes)?;
+                let mut bytes = vec![in arena; 0; length];
+                self.reader.read_exact(&mut bytes)?;
 
-                let mut instructions = vec![];
+                let mut instructions = vec![in arena];
                 let mut cursor = Cursor::new(&bytes);
 
                 while let Ok(opcode) = cursor.read_u8() {
@@ -558,13 +583,16 @@ impl<R: io::Read> ClassReader<R> {
                             catch_type: self.read_u16()?,
                         })
                     })
-                    .collect::<Result<_, _>>()?
+                    .collect_in::<Result<_, _>>(arena)?
             },
             attributes: self.read_attributes(constant_pool)?,
         })
     }
 
-    fn read_line_number_table_attribute(&mut self) -> eyre::Result<LineNumberTableAttribute> {
+    fn read_line_number_table_attribute<'s>(
+        &'s mut self,
+    ) -> eyre::Result<LineNumberTableAttribute<'a>> {
+        let arena = self.arena;
         Ok(LineNumberTableAttribute {
             line_number_table: {
                 let length = self.read_u16()? as usize;
@@ -575,12 +603,15 @@ impl<R: io::Read> ClassReader<R> {
                             line_number: self.read_u16()?,
                         })
                     })
-                    .collect::<Result<_, _>>()?
+                    .collect_in::<Result<_, _>>(arena)?
             },
         })
     }
 
-    fn read_bootstrap_methods_attribute(&mut self) -> eyre::Result<BootstrapMethodsAttribute> {
+    fn read_bootstrap_methods_attribute<'s>(
+        &'s mut self,
+    ) -> eyre::Result<BootstrapMethodsAttribute<'a>> {
+        let arena = self.arena;
         Ok(BootstrapMethodsAttribute {
             bootstrap_methods: {
                 let length = self.read_u16()? as usize;
@@ -592,16 +623,17 @@ impl<R: io::Read> ClassReader<R> {
                                 let length = self.read_u16()? as usize;
                                 (0..length)
                                     .map(|_| self.read_u16())
-                                    .collect::<Result<_, _>>()?
+                                    .collect_in::<Result<_, _>>(arena)?
                             },
                         })
                     })
-                    .collect::<Result<_, _>>()?
+                    .collect_in::<Result<_, _>>(arena)?
             },
         })
     }
 
-    fn read_inner_classes_attribute(&mut self) -> eyre::Result<InnerClassesAttribute> {
+    fn read_inner_classes_attribute<'s>(&'s mut self) -> eyre::Result<InnerClassesAttribute<'a>> {
+        let arena = self.arena;
         Ok(InnerClassesAttribute {
             classes: {
                 let length = self.read_u16()? as usize;
@@ -616,7 +648,7 @@ impl<R: io::Read> ClassReader<R> {
                             ),
                         })
                     })
-                    .collect::<Result<_, _>>()?
+                    .collect_in::<Result<_, _>>(arena)?
             },
         })
     }
@@ -628,19 +660,19 @@ impl<R: io::Read> ClassReader<R> {
     }
 
     fn read_u8(&mut self) -> io::Result<u8> {
-        self.0.read_u8()
+        self.reader.read_u8()
     }
 
     fn read_u16(&mut self) -> io::Result<u16> {
-        self.0.read_u16::<BigEndian>()
+        self.reader.read_u16::<BigEndian>()
     }
 
     fn read_u32(&mut self) -> io::Result<u32> {
-        self.0.read_u32::<BigEndian>()
+        self.reader.read_u32::<BigEndian>()
     }
 
     fn read_u64(&mut self) -> io::Result<u64> {
-        self.0.read_u64::<BigEndian>()
+        self.reader.read_u64::<BigEndian>()
     }
 }
 

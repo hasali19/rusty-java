@@ -1,21 +1,22 @@
 use bitflags::bitflags;
+use bumpalo::collections::Vec;
 
 use crate::instructions::Instruction;
 
 use self::constant_pool::ConstantPool;
 
 #[derive(Debug)]
-pub struct ClassFile {
+pub struct ClassFile<'a> {
     pub minor_version: u16,
     pub major_version: u16,
-    pub constant_pool: ConstantPool,
+    pub constant_pool: ConstantPool<'a>,
     pub access_flags: ClassAccessFlags,
     pub this_class: u16,
     pub super_class: u16,
-    pub interfaces: Vec<u16>,
-    pub fields: Vec<FieldInfo>,
-    pub methods: Vec<MethodInfo>,
-    pub attributes: Vec<AttributeInfo>,
+    pub interfaces: Vec<'a, u16>,
+    pub fields: Vec<'a, FieldInfo<'a>>,
+    pub methods: Vec<'a, MethodInfo<'a>>,
+    pub attributes: Vec<'a, AttributeInfo<'a>>,
 }
 
 pub mod constant_pool {
@@ -24,16 +25,16 @@ pub mod constant_pool {
     use strum::EnumTryAs;
 
     #[derive(Debug)]
-    pub struct ConstantPool(pub(crate) Vec<ConstantInfo>);
+    pub struct ConstantPool<'a>(pub(crate) bumpalo::collections::Vec<'a, ConstantInfo<'a>>);
 
-    impl ConstantPool {
+    impl<'a> ConstantPool<'a> {
         pub fn get(&self, index: u16) -> Option<&ConstantInfo> {
             self.0.get(index.checked_sub(1)? as usize)
         }
     }
 
-    impl Index<u16> for ConstantPool {
-        type Output = ConstantInfo;
+    impl<'a> Index<u16> for ConstantPool<'a> {
+        type Output = ConstantInfo<'a>;
 
         fn index(&self, index: u16) -> &Self::Output {
             &self.0[index as usize - 1]
@@ -41,9 +42,9 @@ pub mod constant_pool {
     }
 
     #[derive(Debug, EnumTryAs)]
-    pub enum ConstantInfo {
+    pub enum ConstantInfo<'a> {
         Unused,
-        Utf8(std::string::String),
+        Utf8(bumpalo::collections::String<'a>),
         Integer(i32),
         Float(f32),
         Long(i64),
@@ -140,11 +141,11 @@ bitflags! {
 }
 
 #[derive(Debug)]
-pub struct FieldInfo {
+pub struct FieldInfo<'a> {
     pub access_flags: FieldAccessFlags,
     pub name_index: u16,
     pub descriptor_index: u16,
-    pub attributes: Vec<AttributeInfo>,
+    pub attributes: Vec<'a, AttributeInfo<'a>>,
 }
 
 bitflags! {
@@ -163,11 +164,11 @@ bitflags! {
 }
 
 #[derive(Debug)]
-pub struct MethodInfo {
+pub struct MethodInfo<'a> {
     pub access_flags: MethodAccessFlags,
     pub name_index: u16,
     pub descriptor_index: u16,
-    pub attributes: Vec<AttributeInfo>,
+    pub attributes: Vec<'a, AttributeInfo<'a>>,
 }
 
 bitflags! {
@@ -189,22 +190,22 @@ bitflags! {
 }
 
 #[derive(Debug)]
-pub enum AttributeInfo {
-    Code(CodeAttribute),
-    LineNumberTable(LineNumberTableAttribute),
-    BootstrapMethods(BootstrapMethodsAttribute),
-    InnerClasses(InnerClassesAttribute),
+pub enum AttributeInfo<'a> {
+    Code(CodeAttribute<'a>),
+    LineNumberTable(LineNumberTableAttribute<'a>),
+    BootstrapMethods(BootstrapMethodsAttribute<'a>),
+    InnerClasses(InnerClassesAttribute<'a>),
     SourceFile(SourceFileAttribute),
-    Custom(CustomAttribute),
+    Custom(CustomAttribute<'a>),
 }
 
 #[derive(Debug)]
-pub struct CodeAttribute {
+pub struct CodeAttribute<'a> {
     pub max_stack: u16,
     pub max_locals: u16,
-    pub code: Vec<Instruction>,
-    pub exception_table: Vec<ExceptionTableEntry>,
-    pub attributes: Vec<AttributeInfo>,
+    pub code: Vec<'a, Instruction>,
+    pub exception_table: Vec<'a, ExceptionTableEntry>,
+    pub attributes: Vec<'a, AttributeInfo<'a>>,
 }
 
 #[derive(Debug)]
@@ -216,8 +217,8 @@ pub struct ExceptionTableEntry {
 }
 
 #[derive(Debug)]
-pub struct LineNumberTableAttribute {
-    pub line_number_table: Vec<LineNumberTableEntry>,
+pub struct LineNumberTableAttribute<'a> {
+    pub line_number_table: Vec<'a, LineNumberTableEntry>,
 }
 
 #[derive(Debug)]
@@ -227,19 +228,19 @@ pub struct LineNumberTableEntry {
 }
 
 #[derive(Debug)]
-pub struct BootstrapMethodsAttribute {
-    pub bootstrap_methods: Vec<BootstrapMethod>,
+pub struct BootstrapMethodsAttribute<'a> {
+    pub bootstrap_methods: Vec<'a, BootstrapMethod<'a>>,
 }
 
 #[derive(Debug)]
-pub struct BootstrapMethod {
+pub struct BootstrapMethod<'a> {
     pub bootstrap_method_ref: u16,
-    pub bootstrap_arguments: Vec<u16>,
+    pub bootstrap_arguments: Vec<'a, u16>,
 }
 
 #[derive(Debug)]
-pub struct InnerClassesAttribute {
-    pub classes: Vec<InnerClass>,
+pub struct InnerClassesAttribute<'a> {
+    pub classes: Vec<'a, InnerClass>,
 }
 
 #[derive(Debug)]
@@ -272,7 +273,7 @@ pub struct SourceFileAttribute {
 }
 
 #[derive(Debug)]
-pub struct CustomAttribute {
+pub struct CustomAttribute<'a> {
     pub attribute_name_index: u16,
-    pub info: Vec<u8>,
+    pub info: Vec<'a, u8>,
 }
