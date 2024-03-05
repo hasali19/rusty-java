@@ -6,12 +6,26 @@ use hashbrown::hash_map::DefaultHashBuilder;
 use hashbrown::HashMap;
 
 use crate::class_file::constant_pool::ConstantPool;
-use crate::class_file::{ClassFile, MethodInfo};
+use crate::class_file::{ClassFile, MethodAccessFlags};
+use crate::instructions::Instruction;
 
 #[derive(Debug)]
 pub struct Class<'a> {
     class_file: &'a ClassFile<'a>,
-    methods: HashMap<MethodId<'a>, &'a MethodInfo<'a>, DefaultHashBuilder, &'a Bump>,
+    methods: HashMap<MethodId<'a>, Method<'a>, DefaultHashBuilder, &'a Bump>,
+}
+
+#[derive(Debug)]
+pub struct Method<'a> {
+    pub access_flags: MethodAccessFlags,
+    pub body: Option<MethodBody<'a>>,
+}
+
+#[derive(Debug)]
+pub struct MethodBody<'a> {
+    pub locals: usize,
+    pub stack_size: usize,
+    pub code: &'a [Instruction],
 }
 
 impl<'a> Class<'a> {
@@ -35,15 +49,28 @@ impl<'a> Class<'a> {
                         .try_as_utf_8_ref()
                         .wrap_err("invalid method descriptor in constant pool")?;
 
-                    methods.insert(MethodId { name, descriptor }, method);
+                    methods.insert(
+                        MethodId { name, descriptor },
+                        Method {
+                            access_flags: method.access_flags,
+                            body: method.attributes.iter().find_map(|attr| {
+                                let attr = attr.try_as_code_ref()?;
+                                Some(MethodBody {
+                                    locals: attr.max_locals as usize,
+                                    stack_size: attr.max_stack as usize,
+                                    code: attr.code.as_slice(),
+                                })
+                            }),
+                        },
+                    );
                 }
                 methods
             },
         })
     }
 
-    pub fn method(&self, name: &str, descriptor: &str) -> Option<&'a MethodInfo> {
-        self.methods.get(&MethodId { name, descriptor }).copied()
+    pub fn method<'b: 'a>(&'a self, name: &'b str, descriptor: &'b str) -> Option<&'a Method<'a>> {
+        self.methods.get(&MethodId { name, descriptor })
     }
 
     pub fn constant_pool(&self) -> &'a ConstantPool {

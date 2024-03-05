@@ -6,7 +6,7 @@ use color_eyre::eyre::{self, bail, eyre, Context, ContextCompat};
 
 use crate::class::Class;
 use crate::class_file::constant_pool::{self, ConstantInfo};
-use crate::class_file::{AttributeInfo, MethodAccessFlags};
+use crate::class_file::MethodAccessFlags;
 use crate::instructions::{Instruction, InvokeKind, LoadStoreType, NumberType, ReturnType};
 use crate::reader::ClassReader;
 
@@ -69,25 +69,14 @@ impl<'a> Vm<'a> {
             .method(method_name, method_descriptor)
             .wrap_err_with(|| eyre!("method not found"))?;
 
-        let code_attr = method
-            .attributes
-            .iter()
-            .find_map(|attr| {
-                let AttributeInfo::Code(attr) = attr else {
-                    return None;
-                };
-                Some(attr)
-            })
-            .wrap_err("missing code attribute")?;
-
-        let code = &code_attr.code;
+        let body = method.body.as_ref().wrap_err("missing code attribute")?;
 
         let mut pc = 0;
-        let mut locals = vec![Local::None; code_attr.max_locals as usize];
-        let mut operand_stack = Vec::with_capacity(code_attr.max_stack as usize);
+        let mut locals = vec![Local::None; body.locals];
+        let mut operand_stack = Vec::with_capacity(body.stack_size);
 
         loop {
-            let instruction = &code[pc];
+            let instruction = &body.code[pc];
             match instruction {
                 Instruction::r#return {
                     data_type: ReturnType::Void,

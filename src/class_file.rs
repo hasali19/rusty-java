@@ -1,5 +1,6 @@
 use bitflags::bitflags;
 use bumpalo::collections::Vec;
+use strum::EnumTryAs;
 
 use crate::instructions::Instruction;
 
@@ -172,7 +173,7 @@ pub struct MethodInfo<'a> {
 }
 
 bitflags! {
-    #[derive(Debug)]
+    #[derive(Clone, Copy, Debug)]
     pub struct MethodAccessFlags: u16 {
         const PUBLIC = 0x0001;
         const PRIVATE = 0x0002;
@@ -189,7 +190,7 @@ bitflags! {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, EnumTryAs)]
 pub enum AttributeInfo<'a> {
     Code(CodeAttribute<'a>),
     LineNumberTable(LineNumberTableAttribute<'a>),
