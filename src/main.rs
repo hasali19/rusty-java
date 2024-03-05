@@ -1,6 +1,6 @@
 use bumpalo::Bump;
 use clap::Parser;
-use color_eyre::eyre::{self, Context};
+use color_eyre::eyre::{self, Context, ContextCompat};
 use rusty_java::vm::Vm;
 
 #[derive(clap::Parser)]
@@ -23,7 +23,11 @@ fn main() -> eyre::Result<()> {
     if args.dump {
         println!("{class:#?}");
     } else {
-        vm.call_method(class, "main", "([Ljava/lang/String;)V")
+        let main = class
+            .method("main", "([Ljava/lang/String;)V")
+            .wrap_err("main method not found")?;
+
+        vm.call_method(class, main)
             .wrap_err("failed to execute main method")?;
     }
 

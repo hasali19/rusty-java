@@ -4,7 +4,7 @@ use std::io::BufReader;
 use bumpalo::Bump;
 use color_eyre::eyre::{self, bail, eyre, Context, ContextCompat};
 
-use crate::class::Class;
+use crate::class::{Class, Method};
 use crate::class_file::constant_pool::{self, ConstantInfo};
 use crate::class_file::MethodAccessFlags;
 use crate::instructions::{Instruction, InvokeKind, LoadStoreType, NumberType, ReturnType};
@@ -56,20 +56,17 @@ impl<'a> Vm<'a> {
 
         let class = self.arena.alloc(Class::new(self.arena, class_file)?);
 
+        if let Some(clinit) = class.method("<clinit>", "()V")
+            && clinit.access_flags.contains(MethodAccessFlags::STATIC)
+        {
+            self.call_method(class, clinit)?;
+        }
+
         Ok(class)
     }
 
-    pub fn call_method(
-        &mut self,
-        class: &Class,
-        method_name: &str,
-        method_descriptor: &str,
-    ) -> eyre::Result<()> {
-        let method = class
-            .method(method_name, method_descriptor)
-            .wrap_err_with(|| eyre!("method not found"))?;
-
-        let body = method.body.as_ref().wrap_err("missing code attribute")?;
+    pub fn call_method(&mut self, class: &Class, method: &Method) -> eyre::Result<()> {
+        let body = method.body.as_ref().wrap_err("missing method body")?;
 
         let mut pc = 0;
         let mut locals = vec![Local::None; body.locals];
