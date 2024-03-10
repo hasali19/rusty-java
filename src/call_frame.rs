@@ -1,10 +1,12 @@
 use color_eyre::eyre::{self, bail, eyre, ContextCompat};
+use strum::EnumTryAs;
 
 use crate::class::{Class, Method};
 use crate::class_file::constant_pool::{self, ConstantInfo};
 use crate::class_file::MethodAccessFlags;
 use crate::instructions::{Instruction, InvokeKind, LoadStoreType, NumberType, ReturnType};
 
+#[derive(EnumTryAs)]
 pub enum Operand<'a> {
     Byte(i8),
     Short(i16),
@@ -164,6 +166,20 @@ impl<'a> CallFrame<'a> {
                 }
                 Instruction::invoke { kind, index } => {
                     self.execute_invoke(*index, *kind)?;
+                    self.pc += 1;
+                }
+                Instruction::add { data_type } => {
+                    let a = self.operand_stack.pop().wrap_err("missing add operand")?;
+                    let b = self.operand_stack.pop().wrap_err("missing add operand")?;
+                    match data_type {
+                        NumberType::Int => self.operand_stack.push(Operand::Int(
+                            a.try_as_int().wrap_err("invalid type")?
+                                + b.try_as_int().wrap_err("invalid type")?,
+                        )),
+                        NumberType::Long => todo!(),
+                        NumberType::Float => todo!(),
+                        NumberType::Double => todo!(),
+                    }
                     self.pc += 1;
                 }
                 _ => todo!("unimplemented instruction: {instruction:?}"),
