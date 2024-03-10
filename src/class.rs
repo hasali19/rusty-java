@@ -5,12 +5,13 @@ use std::num::NonZeroU8;
 use bumpalo::collections::Vec;
 use bumpalo::{vec, Bump};
 use byteorder::{BigEndian, ReadBytesExt};
-use color_eyre::eyre::{self, bail, eyre, ContextCompat};
+use color_eyre::eyre::{self, bail, eyre, Context, ContextCompat};
 use hashbrown::hash_map::DefaultHashBuilder;
 use hashbrown::HashMap;
 
 use crate::class_file::constant_pool::ConstantPool;
 use crate::class_file::{ClassFile, MethodAccessFlags};
+use crate::descriptor::{parse_method_descriptor, MethodDescriptor};
 use crate::instructions::{
     ArrayLoadStoreType, Condition, EqCondition, Instruction, IntegerType, InvokeKind, NumberType,
     OrdCondition, ReturnType,
@@ -26,6 +27,7 @@ pub struct Class<'a> {
 
 #[derive(Debug)]
 pub struct Method<'a> {
+    pub descriptor: MethodDescriptor<'a>,
     pub access_flags: MethodAccessFlags,
     pub body: Option<MethodBody<'a>>,
 }
@@ -70,6 +72,9 @@ impl<'a> Class<'a> {
                     methods.insert(
                         MethodId { name, descriptor },
                         Method {
+                            descriptor: parse_method_descriptor(descriptor).wrap_err_with(
+                                || eyre!("invalid method descriptor: {descriptor}"),
+                            )?,
                             access_flags: method.access_flags,
                             body: method
                                 .attributes

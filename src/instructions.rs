@@ -160,7 +160,7 @@ pub enum IfCmpType {
     Reference,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum InvokeKind {
     Virtual,
     Special,
