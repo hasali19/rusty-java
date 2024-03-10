@@ -87,7 +87,11 @@ impl<'a> CallFrame<'a> {
 
                     let ret = match data_type {
                         ReturnType::Void => None,
-                        ReturnType::Int => todo!(),
+                        ReturnType::Int => {
+                            return Ok(Some(
+                                self.operand_stack.pop().wrap_err("missing return value")?,
+                            ))
+                        }
                         ReturnType::Long => todo!(),
                         ReturnType::Float => todo!(),
                         ReturnType::Double => todo!(),
@@ -159,7 +163,7 @@ impl<'a> CallFrame<'a> {
                     self.pc += 1;
                 }
                 Instruction::invoke { kind, index } => {
-                    self.execute_invoke(self.class, *index, *kind)?;
+                    self.execute_invoke(*index, *kind)?;
                     self.pc += 1;
                 }
                 _ => todo!("unimplemented instruction: {instruction:?}"),
@@ -167,29 +171,25 @@ impl<'a> CallFrame<'a> {
         }
     }
 
-    fn execute_invoke(
-        &mut self,
-        class: &Class,
-        const_index: u16,
-        kind: InvokeKind,
-    ) -> eyre::Result<()> {
-        let method_ref = &class.constant_pool()[const_index]
+    fn execute_invoke(&mut self, const_index: u16, kind: InvokeKind) -> eyre::Result<()> {
+        let method_ref = &self.class.constant_pool()[const_index]
             .try_as_method_ref_ref()
             .wrap_err("expected methodref")?;
 
-        let name_and_type = class.constant_pool()[method_ref.name_and_type_index]
+        let name_and_type = self.class.constant_pool()[method_ref.name_and_type_index]
             .try_as_name_and_type_ref()
             .wrap_err("expected name_and_type")?;
 
-        let name = class.constant_pool()[name_and_type.name_index]
+        let name = self.class.constant_pool()[name_and_type.name_index]
             .try_as_utf_8_ref()
             .wrap_err("expected utf8")?;
 
-        let descriptor = class.constant_pool()[name_and_type.descriptor_index]
+        let descriptor = self.class.constant_pool()[name_and_type.descriptor_index]
             .try_as_utf_8_ref()
             .wrap_err("expected utf8")?;
 
-        let method = class
+        let method = self
+            .class
             .method(name, descriptor)
             .wrap_err_with(|| eyre!("method not found: {name}{descriptor}"))?;
 
@@ -232,7 +232,9 @@ impl<'a> CallFrame<'a> {
                             Operand::StringConst(_) => todo!(),
                         });
 
-                    CallFrame::new(class, method, args)?.execute()?;
+                    if let Some(ret) = CallFrame::new(self.class, method, args)?.execute()? {
+                        self.operand_stack.push(ret);
+                    }
                 }
             }
             _ => todo!(),
