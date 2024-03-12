@@ -1,0 +1,6 @@
+---
+source: integration_tests/main.rs
+assertion_line: 68
+expression: stdout
+---
+Hello, world!
