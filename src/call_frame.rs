@@ -1,3 +1,5 @@
+use std::io;
+
 use color_eyre::eyre::{self, bail, eyre, ContextCompat};
 use strum::EnumTryAs;
 
@@ -33,20 +35,22 @@ pub enum Local {
     ReturnAddress(usize),
 }
 
-pub struct CallFrame<'a> {
+pub struct CallFrame<'a, 'b> {
     class: &'a Class<'a>,
     method: &'a Method<'a>,
     pc: usize,
     locals: Vec<Local>,
     operand_stack: Vec<Operand<'a>>,
+    stdout: &'b mut dyn io::Write,
 }
 
-impl<'a> CallFrame<'a> {
+impl<'a, 'b> CallFrame<'a, 'b> {
     pub fn new(
         class: &'a Class<'a>,
         method: &'a Method<'a>,
         args: impl Iterator<Item = Local>,
-    ) -> eyre::Result<CallFrame<'a>> {
+        stdout: &'b mut dyn io::Write,
+    ) -> eyre::Result<CallFrame<'a, 'b>> {
         let body = method.body.as_ref().wrap_err("missing method body")?;
 
         let mut locals = vec![Local::None; body.locals];
@@ -61,6 +65,7 @@ impl<'a> CallFrame<'a> {
             pc: 0,
             locals,
             operand_stack: Vec::with_capacity(body.stack_size),
+            stdout,
         })
     }
 
@@ -218,9 +223,9 @@ impl<'a> CallFrame<'a> {
                         .wrap_err("missing argument to print")?;
 
                     match arg {
-                        Operand::Byte(v) => print!("{v}"),
-                        Operand::StringConst(v) => print!("{v}"),
-                        Operand::Int(v) => print!("{v}"),
+                        Operand::Byte(v) => write!(self.stdout, "{v}")?,
+                        Operand::StringConst(v) => write!(self.stdout, "{v}")?,
+                        Operand::Int(v) => write!(self.stdout, "{v}")?,
                         Operand::Short(_) => todo!(),
                         Operand::Long(_) => todo!(),
                         Operand::Char(_) => todo!(),
@@ -248,7 +253,9 @@ impl<'a> CallFrame<'a> {
                             Operand::StringConst(_) => todo!(),
                         });
 
-                    if let Some(ret) = CallFrame::new(self.class, method, args)?.execute()? {
+                    if let Some(ret) =
+                        CallFrame::new(self.class, method, args, self.stdout)?.execute()?
+                    {
                         self.operand_stack.push(ret);
                     }
                 }

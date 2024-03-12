@@ -1,3 +1,5 @@
+use std::io;
+
 use bumpalo::Bump;
 use clap::Parser;
 use color_eyre::eyre::{self, Context, ContextCompat};
@@ -16,7 +18,8 @@ fn main() -> eyre::Result<()> {
     let args = Args::parse();
 
     let arena = Bump::new();
-    let mut vm = Vm::new(&arena);
+    let mut stdout = io::stdout();
+    let mut vm = Vm::new(&arena, &mut stdout);
 
     let class = vm.load_class_file(&args.class_file)?;
 

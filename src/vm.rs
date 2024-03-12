@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{self, BufReader};
 use std::iter;
 
 use bumpalo::Bump;
@@ -12,11 +12,12 @@ use crate::reader::ClassReader;
 
 pub struct Vm<'a> {
     arena: &'a Bump,
+    stdout: &'a mut dyn io::Write,
 }
 
 impl<'a> Vm<'a> {
-    pub fn new(arena: &'a Bump) -> Vm<'a> {
-        Vm { arena }
+    pub fn new(arena: &'a Bump, stdout: &'a mut dyn io::Write) -> Vm<'a> {
+        Vm { arena, stdout }
     }
 
     pub fn load_class_file(&mut self, name: &str) -> eyre::Result<&'a Class<'a>> {
@@ -38,7 +39,7 @@ impl<'a> Vm<'a> {
     }
 
     pub fn call_method(&mut self, class: &Class, method: &Method) -> eyre::Result<()> {
-        CallFrame::new(class, method, iter::empty())?.execute()?;
+        CallFrame::new(class, method, iter::empty(), self.stdout)?.execute()?;
         Ok(())
     }
 }
