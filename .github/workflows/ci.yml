@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - '**'
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout git repo
+        uses: actions/checkout@v3
+        with:
+          submodules: true
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run clippy
+        run: cargo clippy --workspace --all-features -- -Dwarnings
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout git repo
+        uses: actions/checkout@v3
+        with:
+          submodules: true
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: test
+
+      - name: Install cargo-binstall
+        run: |
+          wget https://github.com/cargo-bins/cargo-binstall/releases/latest/download/cargo-binstall-x86_64-unknown-linux-musl.tgz
+          tar -xvf cargo-binstall-x86_64-unknown-linux-musl.tgz cargo-binstall
+          mv cargo-binstall ~/.cargo/bin
+
+      - name: Install cargo-nextest
+        run: cargo binstall cargo-nextest --secure --no-confirm --force
+
+      - name: Run tests
+        run: cargo nextest run
