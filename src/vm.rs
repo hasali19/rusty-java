@@ -13,11 +13,16 @@ use crate::reader::ClassReader;
 pub struct Vm<'a> {
     arena: &'a Bump,
     stdout: &'a mut dyn io::Write,
+    heap: Bump,
 }
 
 impl<'a> Vm<'a> {
     pub fn new(arena: &'a Bump, stdout: &'a mut dyn io::Write) -> Vm<'a> {
-        Vm { arena, stdout }
+        Vm {
+            arena,
+            stdout,
+            heap: Bump::new(),
+        }
     }
 
     pub fn load_class_file(&mut self, name: &str) -> eyre::Result<&'a Class<'a>> {
@@ -39,7 +44,7 @@ impl<'a> Vm<'a> {
     }
 
     pub fn call_method(&mut self, class: &Class, method: &Method) -> eyre::Result<()> {
-        CallFrame::new(class, method, iter::empty(), self.stdout)?.execute()?;
+        CallFrame::new(class, method, iter::empty(), self.stdout, &self.heap)?.execute()?;
         Ok(())
     }
 }

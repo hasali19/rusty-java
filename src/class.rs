@@ -13,8 +13,8 @@ use crate::class_file::constant_pool::ConstantPool;
 use crate::class_file::{ClassFile, MethodAccessFlags};
 use crate::descriptor::{parse_method_descriptor, MethodDescriptor};
 use crate::instructions::{
-    ArrayLoadStoreType, Condition, EqCondition, Instruction, IntegerType, InvokeKind, NumberType,
-    OrdCondition, ReturnType,
+    ArrayLoadStoreType, ArrayType, Condition, EqCondition, Instruction, IntegerType, InvokeKind,
+    NumberType, OrdCondition, ReturnType,
 };
 use crate::opcodes::OpCode;
 
@@ -363,7 +363,9 @@ pub fn decode_instructions<'a>(
                 Instruction::invoke(InvokeKind::Dynamic, index)
             }
             OpCode::new => Instruction::new(cursor.read_u16_be()?),
-            OpCode::newarray => Instruction::newarray(cursor.read_u8()?),
+            OpCode::newarray => Instruction::newarray(
+                ArrayType::from_repr(cursor.read_u8()?).wrap_err("invalid array type")?,
+            ),
             OpCode::anewarray => Instruction::anewarray(cursor.read_u16_be()?),
             OpCode::arraylength => Instruction::arraylength,
             OpCode::athrow => Instruction::athrow,

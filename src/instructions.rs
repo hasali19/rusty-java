@@ -1,5 +1,7 @@
 use std::num::NonZeroU8;
 
+use strum::FromRepr;
+
 #[allow(non_camel_case_types)]
 #[derive(Debug)]
 pub enum Instruction {
@@ -71,7 +73,7 @@ pub enum Instruction {
     putfield { index: u16 },
     invoke { kind: InvokeKind, index: u16 },
     new { index: u16 },
-    newarray { index: u8 },
+    newarray { atype: ArrayType },
     anewarray { index: u16 },
     arraylength,
     athrow,
@@ -120,7 +122,7 @@ pub enum LoadStoreType {
     Reference,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum ArrayLoadStoreType {
     Int,
     Long,
@@ -177,6 +179,19 @@ pub enum ReturnType {
     Float,
     Double,
     Reference,
+}
+
+#[derive(Clone, Copy, Debug, FromRepr)]
+#[repr(u8)]
+pub enum ArrayType {
+    Boolean = 4,
+    Char = 5,
+    Float = 6,
+    Double = 7,
+    Byte = 8,
+    Short = 9,
+    Int = 10,
+    Long = 11,
 }
 
 impl Instruction {
@@ -418,8 +433,8 @@ impl Instruction {
         Instruction::new { index }
     }
 
-    pub fn newarray(index: u8) -> Instruction {
-        Instruction::newarray { index }
+    pub fn newarray(atype: ArrayType) -> Instruction {
+        Instruction::newarray { atype }
     }
 
     pub fn anewarray(index: u16) -> Instruction {

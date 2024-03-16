@@ -1,5 +1,7 @@
+use std::alloc::Layout;
 use std::io;
 
+use bumpalo::Bump;
 use color_eyre::eyre::{self, bail, eyre, ContextCompat};
 use strum::EnumTryAs;
 
@@ -7,10 +9,11 @@ use crate::class::{Class, Method};
 use crate::class_file::constant_pool::{self, ConstantInfo};
 use crate::class_file::MethodAccessFlags;
 use crate::instructions::{
-    Condition, Instruction, InvokeKind, LoadStoreType, NumberType, ReturnType,
+    ArrayLoadStoreType, ArrayType, Condition, Instruction, InvokeKind, LoadStoreType, NumberType,
+    ReturnType,
 };
 
-#[derive(EnumTryAs)]
+#[derive(Debug, EnumTryAs)]
 pub enum Operand<'a> {
     Byte(i8),
     Short(i16),
@@ -21,6 +24,7 @@ pub enum Operand<'a> {
     Double(f64),
     Boolean(bool),
     ReturnAddress(usize),
+    Reference(usize),
     StringConst(&'a str),
 }
 
@@ -37,12 +41,35 @@ pub enum Local {
     ReturnAddress(usize),
 }
 
+#[derive(Debug)]
+#[repr(C)]
+struct ArrayHeader {
+    atype: ArrayType,
+    length: usize,
+}
+
+impl ArrayHeader {
+    unsafe fn data<'a, T>(&mut self) -> eyre::Result<&'a mut [T]> {
+        let header_layout = Layout::new::<ArrayHeader>();
+        let array_data_layout = Layout::array::<T>(self.length)?;
+
+        let (array_layout, _) = header_layout.extend(array_data_layout)?;
+        let offset = array_layout.size() - array_data_layout.size();
+
+        let header_ptr = self as *mut ArrayHeader;
+        let data_ptr = (header_ptr as usize + offset) as *mut T;
+
+        Ok(unsafe { std::slice::from_raw_parts_mut(data_ptr, self.length) })
+    }
+}
+
 pub struct CallFrame<'a, 'b> {
     class: &'a Class<'a>,
     method: &'a Method<'a>,
     locals: Vec<Local>,
     operand_stack: Vec<Operand<'a>>,
     stdout: &'b mut dyn io::Write,
+    heap: &'a Bump,
 }
 
 impl<'a, 'b> CallFrame<'a, 'b> {
@@ -51,6 +78,7 @@ impl<'a, 'b> CallFrame<'a, 'b> {
         method: &'a Method<'a>,
         args: impl Iterator<Item = Local>,
         stdout: &'b mut dyn io::Write,
+        heap: &'a Bump,
     ) -> eyre::Result<CallFrame<'a, 'b>> {
         let body = method.body.as_ref().wrap_err("missing method body")?;
 
@@ -66,6 +94,7 @@ impl<'a, 'b> CallFrame<'a, 'b> {
             locals,
             operand_stack: Vec::with_capacity(body.stack_size),
             stdout,
+            heap,
         })
     }
 
@@ -132,13 +161,22 @@ impl<'a, 'b> CallFrame<'a, 'b> {
                         Operand::Byte(v) => Local::Byte(v),
                         Operand::StringConst(_) => todo!(),
                         Operand::Int(v) => Local::Int(v),
-                        Operand::Short(_) => todo!(),
-                        Operand::Long(_) => todo!(),
-                        Operand::Char(_) => todo!(),
-                        Operand::Float(_) => todo!(),
-                        Operand::Double(_) => todo!(),
-                        Operand::Boolean(_) => todo!(),
-                        Operand::ReturnAddress(_) => todo!(),
+                        arg => todo!("{arg:?}"),
+                    };
+                }
+                Instruction::store {
+                    data_type: LoadStoreType::Reference,
+                    index,
+                } => {
+                    let operand = self
+                        .operand_stack
+                        .pop()
+                        .wrap_err("no operand provided to istore")?;
+
+                    self.locals[*index as usize] = match operand {
+                        Operand::Reference(v) => Local::Reference(v),
+                        Operand::ReturnAddress(v) => Local::ReturnAddress(v),
+                        arg => unreachable!("unsupported operand for astore: {arg:?}"),
                     };
                 }
                 Instruction::load {
@@ -153,6 +191,19 @@ impl<'a, 'b> CallFrame<'a, 'b> {
                     };
 
                     self.operand_stack.push(Operand::Int(val));
+                }
+                Instruction::load {
+                    data_type: LoadStoreType::Reference,
+                    index,
+                } => {
+                    let val = match self.locals[*index as usize] {
+                        Local::None => todo!(),
+                        Local::Reference(v) => Operand::Reference(v),
+                        Local::ReturnAddress(v) => Operand::ReturnAddress(v),
+                        local => bail!("aload called with invalid local: {local:?}"),
+                    };
+
+                    self.operand_stack.push(val);
                 }
                 Instruction::ldc { index } => {
                     match &self.class.constant_pool()[*index] {
@@ -243,6 +294,73 @@ impl<'a, 'b> CallFrame<'a, 'b> {
                 Instruction::inc { index, value } => {
                     *self.locals[*index as usize].try_as_int_mut().unwrap() += *value as i32;
                 }
+                Instruction::newarray { atype } => {
+                    let length = self
+                        .operand_stack
+                        .pop()
+                        .wrap_err("missing count operand for newarray")?
+                        .try_as_int()
+                        .wrap_err("expected int")? as usize;
+
+                    let array_data_layout = match atype {
+                        ArrayType::Int => Layout::array::<i32>(length)?,
+                        atype => todo!("{atype:?}"),
+                    };
+
+                    let (array_layout, _) =
+                        Layout::new::<ArrayHeader>().extend(array_data_layout)?;
+                    let layout = array_layout.pad_to_align();
+                    let ptr = self.heap.alloc_layout(layout);
+
+                    unsafe {
+                        std::ptr::write_bytes(ptr.as_ptr(), 0, layout.size());
+
+                        *(ptr.as_ptr() as *mut ArrayHeader) = ArrayHeader {
+                            atype: *atype,
+                            length,
+                        };
+                    }
+
+                    self.operand_stack
+                        .push(Operand::Reference(ptr.as_ptr() as _));
+                }
+                Instruction::arraylength => {
+                    let reference = self
+                        .operand_stack
+                        .pop()
+                        .unwrap()
+                        .try_as_reference()
+                        .unwrap();
+
+                    let header = unsafe { &*(reference as *mut ArrayHeader) };
+
+                    self.operand_stack.push(Operand::Int(header.length as i32));
+                }
+                Instruction::arraystore { data_type } => {
+                    let value = self.operand_stack.pop().unwrap();
+                    let index = self.operand_stack.pop().unwrap().try_as_int().unwrap();
+                    let ptr = self
+                        .operand_stack
+                        .pop()
+                        .unwrap()
+                        .try_as_reference()
+                        .unwrap();
+
+                    let header = unsafe { (ptr as *mut ArrayHeader).as_mut().unwrap() };
+
+                    match header.atype {
+                        ArrayType::Int => {
+                            if *data_type != ArrayLoadStoreType::Int {
+                                bail!("invalid array type: {:?}", header.atype);
+                            }
+
+                            unsafe {
+                                header.data::<i32>()?[index as usize] = value.try_as_int().unwrap();
+                            }
+                        }
+                        t => todo!("{t:?}"),
+                    }
+                }
                 _ => todo!("unimplemented instruction: {instruction:?}"),
             }
 
@@ -286,13 +404,16 @@ impl<'a, 'b> CallFrame<'a, 'b> {
                         Operand::Byte(v) => write!(self.stdout, "{v}")?,
                         Operand::StringConst(v) => write!(self.stdout, "{v}")?,
                         Operand::Int(v) => write!(self.stdout, "{v}")?,
-                        Operand::Short(_) => todo!(),
-                        Operand::Long(_) => todo!(),
-                        Operand::Char(_) => todo!(),
-                        Operand::Float(_) => todo!(),
-                        Operand::Double(_) => todo!(),
-                        Operand::Boolean(_) => todo!(),
-                        Operand::ReturnAddress(_) => todo!(),
+                        Operand::Reference(ptr) => {
+                            let header = unsafe { (ptr as *mut ArrayHeader).as_mut().unwrap() };
+                            match header.atype {
+                                ArrayType::Int => {
+                                    write!(self.stdout, "{:?}", unsafe { header.data::<i32>()? })?;
+                                }
+                                t => todo!("{t:?}"),
+                            }
+                        }
+                        arg => todo!("{arg:?}"),
                     }
                 } else {
                     let args = method
@@ -301,20 +422,13 @@ impl<'a, 'b> CallFrame<'a, 'b> {
                         .iter()
                         .map(|_| self.operand_stack.pop().unwrap())
                         .map(|op| match op {
-                            Operand::Byte(_) => todo!(),
-                            Operand::Short(_) => todo!(),
                             Operand::Int(v) => Local::Int(v),
-                            Operand::Long(_) => todo!(),
-                            Operand::Char(_) => todo!(),
-                            Operand::Float(_) => todo!(),
-                            Operand::Double(_) => todo!(),
-                            Operand::Boolean(_) => todo!(),
-                            Operand::ReturnAddress(_) => todo!(),
-                            Operand::StringConst(_) => todo!(),
+                            op => todo!("{op:?}"),
                         });
 
                     if let Some(ret) =
-                        CallFrame::new(self.class, method, args, self.stdout)?.execute()?
+                        CallFrame::new(self.class, method, args, self.stdout, self.heap)?
+                            .execute()?
                     {
                         self.operand_stack.push(ret);
                     }
