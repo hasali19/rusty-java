@@ -128,7 +128,15 @@ pub fn decode_instructions<'a>(
     let mut instructions = vec![in arena];
     let mut cursor = Cursor::new(&bytes);
 
+    let mut address_map = std::vec![];
+    let mut index_map = std::vec![0; bytes.len()];
+    let mut i = 0;
+
     while let Ok(opcode) = cursor.read_u8() {
+        address_map.push(cursor.position() as usize - 1);
+        index_map[cursor.position() as usize - 1] = i;
+        i += 1;
+
         let opcode =
             OpCode::from_repr(opcode).wrap_err_with(|| eyre!("unknown opcode: {opcode}"))?;
 
@@ -286,22 +294,22 @@ pub fn decode_instructions<'a>(
             OpCode::fcmpg => Instruction::fcmp(OrdCondition::Gt),
             OpCode::dcmpl => Instruction::dcmp(OrdCondition::Lt),
             OpCode::dcmpg => Instruction::dcmp(OrdCondition::Gt),
-            OpCode::ifeq => Instruction::r#if(Condition::Eq, cursor.read_u16_be()?),
-            OpCode::ifne => Instruction::r#if(Condition::Ne, cursor.read_u16_be()?),
-            OpCode::iflt => Instruction::r#if(Condition::Lt, cursor.read_u16_be()?),
-            OpCode::ifge => Instruction::r#if(Condition::Ge, cursor.read_u16_be()?),
-            OpCode::ifgt => Instruction::r#if(Condition::Gt, cursor.read_u16_be()?),
-            OpCode::ifle => Instruction::r#if(Condition::Le, cursor.read_u16_be()?),
-            OpCode::if_icmpeq => Instruction::if_icmp(Condition::Eq, cursor.read_u16_be()?),
-            OpCode::if_icmpne => Instruction::if_icmp(Condition::Ne, cursor.read_u16_be()?),
-            OpCode::if_icmplt => Instruction::if_icmp(Condition::Lt, cursor.read_u16_be()?),
-            OpCode::if_icmpge => Instruction::if_icmp(Condition::Ge, cursor.read_u16_be()?),
-            OpCode::if_icmpgt => Instruction::if_icmp(Condition::Gt, cursor.read_u16_be()?),
-            OpCode::if_icmple => Instruction::if_icmp(Condition::Le, cursor.read_u16_be()?),
-            OpCode::if_acmpeq => Instruction::if_acmp(EqCondition::Eq, cursor.read_u16_be()?),
-            OpCode::if_acmpne => Instruction::if_acmp(EqCondition::Ne, cursor.read_u16_be()?),
-            OpCode::goto => Instruction::goto(cursor.read_u16_be()? as u32),
-            OpCode::jsr => Instruction::jsr(cursor.read_u16_be()? as u32),
+            OpCode::ifeq => Instruction::r#if(Condition::Eq, cursor.read_i16_be()?),
+            OpCode::ifne => Instruction::r#if(Condition::Ne, cursor.read_i16_be()?),
+            OpCode::iflt => Instruction::r#if(Condition::Lt, cursor.read_i16_be()?),
+            OpCode::ifge => Instruction::r#if(Condition::Ge, cursor.read_i16_be()?),
+            OpCode::ifgt => Instruction::r#if(Condition::Gt, cursor.read_i16_be()?),
+            OpCode::ifle => Instruction::r#if(Condition::Le, cursor.read_i16_be()?),
+            OpCode::if_icmpeq => Instruction::if_icmp(Condition::Eq, cursor.read_i16_be()?),
+            OpCode::if_icmpne => Instruction::if_icmp(Condition::Ne, cursor.read_i16_be()?),
+            OpCode::if_icmplt => Instruction::if_icmp(Condition::Lt, cursor.read_i16_be()?),
+            OpCode::if_icmpge => Instruction::if_icmp(Condition::Ge, cursor.read_i16_be()?),
+            OpCode::if_icmpgt => Instruction::if_icmp(Condition::Gt, cursor.read_i16_be()?),
+            OpCode::if_icmple => Instruction::if_icmp(Condition::Le, cursor.read_i16_be()?),
+            OpCode::if_acmpeq => Instruction::if_acmp(EqCondition::Eq, cursor.read_i16_be()?),
+            OpCode::if_acmpne => Instruction::if_acmp(EqCondition::Ne, cursor.read_i16_be()?),
+            OpCode::goto => Instruction::goto(cursor.read_i16_be()? as i32),
+            OpCode::jsr => Instruction::jsr(cursor.read_i16_be()? as i32),
             OpCode::ret => Instruction::ret(cursor.read_u8()?),
             OpCode::tableswitch => {
                 cursor.align_to(4);
@@ -367,15 +375,38 @@ pub fn decode_instructions<'a>(
             OpCode::multianewarray => {
                 Instruction::multianewarray(cursor.read_u16_be()?, cursor.read_u8()?)
             }
-            OpCode::ifnull => Instruction::ifnull(cursor.read_u16_be()?),
-            OpCode::ifnonnull => Instruction::ifnonnull(cursor.read_u16_be()?),
-            OpCode::goto_w => Instruction::goto(cursor.read_u32_be()?),
-            OpCode::jsr_w => Instruction::jsr(cursor.read_u32_be()?),
+            OpCode::ifnull => Instruction::ifnull(cursor.read_i16_be()?),
+            OpCode::ifnonnull => Instruction::ifnonnull(cursor.read_i16_be()?),
+            OpCode::goto_w => Instruction::goto(cursor.read_i32_be()?),
+            OpCode::jsr_w => Instruction::jsr(cursor.read_i32_be()?),
             OpCode::breakpoint | OpCode::impdep1 | OpCode::impdep2 => {
                 bail!("unexpected opcode: {opcode:?}")
             }
         };
         instructions.push(instruction);
+    }
+
+    // Branch values represent byte address offsets of the instruction to jump to, relative to the current instruction.
+    // When instructions are decoded these addresses are no longer valid, so this step updates them to represent index
+    // offsets instead.
+    for (i, instruction) in instructions.iter_mut().enumerate() {
+        macro_rules! address_to_index {
+            ($branch:expr, $t:ty) => {{
+                (index_map[address_map[i].checked_add_signed($branch as isize).unwrap()] as isize
+                    - i as isize) as $t
+            }};
+        }
+
+        match instruction {
+            Instruction::r#if { branch, .. } => *branch = address_to_index!(*branch, i16),
+            Instruction::if_icmp { branch, .. } => *branch = address_to_index!(*branch, i16),
+            Instruction::if_acmp { branch, .. } => *branch = address_to_index!(*branch, i16),
+            Instruction::goto { branch, .. } => *branch = address_to_index!(*branch, i32),
+            Instruction::jsr { branch, .. } => *branch = address_to_index!(*branch, i32),
+            Instruction::ifnull { branch, .. } => *branch = address_to_index!(*branch, i16),
+            Instruction::ifnonnull { branch, .. } => *branch = address_to_index!(*branch, i16),
+            _ => {}
+        }
     }
 
     Ok(instructions)

@@ -61,9 +61,9 @@ pub enum Instruction {
     lcmp,
     fcmp { condition: OrdCondition },
     dcmp { condition: OrdCondition },
-    r#if { condition: Condition, branch: u16 },
-    if_icmp { condition: Condition, branch: u16 },
-    if_acmp { condition: EqCondition, branch: u16 },
+    r#if { condition: Condition, branch: i16 },
+    if_icmp { condition: Condition, branch: i16 },
+    if_acmp { condition: EqCondition, branch: i16 },
     // References
     getstatic { index: u16 },
     putstatic { index: u16 },
@@ -80,8 +80,8 @@ pub enum Instruction {
     monitorenter,
     monitorexit,
     // Control
-    goto { branch: u32 },
-    jsr { branch: u32 },
+    goto { branch: i32 },
+    jsr { branch: i32 },
     ret { index: u8 },
     tableswitch {/* TODO */},
     lookupswitch {},
@@ -89,8 +89,8 @@ pub enum Instruction {
     // Extended
     // wide,
     multianewarray { index: u16, dimensions: u8 },
-    ifnull { branch: u16 },
-    ifnonnull { branch: u16 },
+    ifnull { branch: i16 },
+    ifnonnull { branch: i16 },
     // Reserved
     breakpoint,
     impdep1,
@@ -362,23 +362,23 @@ impl Instruction {
         Instruction::dcmp { condition }
     }
 
-    pub fn r#if(condition: Condition, branch: u16) -> Instruction {
+    pub fn r#if(condition: Condition, branch: i16) -> Instruction {
         Instruction::r#if { condition, branch }
     }
 
-    pub fn if_icmp(condition: Condition, branch: u16) -> Instruction {
+    pub fn if_icmp(condition: Condition, branch: i16) -> Instruction {
         Instruction::if_icmp { condition, branch }
     }
 
-    pub fn if_acmp(condition: EqCondition, branch: u16) -> Instruction {
+    pub fn if_acmp(condition: EqCondition, branch: i16) -> Instruction {
         Instruction::if_acmp { condition, branch }
     }
 
-    pub fn goto(branch: u32) -> Instruction {
+    pub fn goto(branch: i32) -> Instruction {
         Instruction::goto { branch }
     }
 
-    pub fn jsr(branch: u32) -> Instruction {
+    pub fn jsr(branch: i32) -> Instruction {
         Instruction::jsr { branch }
     }
 
@@ -434,11 +434,11 @@ impl Instruction {
         Instruction::instanceof { index }
     }
 
-    pub fn ifnull(branch: u16) -> Instruction {
+    pub fn ifnull(branch: i16) -> Instruction {
         Instruction::ifnull { branch }
     }
 
-    pub fn ifnonnull(branch: u16) -> Instruction {
+    pub fn ifnonnull(branch: i16) -> Instruction {
         Instruction::ifnull { branch }
     }
 }
