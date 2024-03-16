@@ -40,7 +40,6 @@ pub enum Local {
 pub struct CallFrame<'a, 'b> {
     class: &'a Class<'a>,
     method: &'a Method<'a>,
-    pc: usize,
     locals: Vec<Local>,
     operand_stack: Vec<Operand<'a>>,
     stdout: &'b mut dyn io::Write,
@@ -64,7 +63,6 @@ impl<'a, 'b> CallFrame<'a, 'b> {
         Ok(CallFrame {
             class,
             method,
-            pc: 0,
             locals,
             operand_stack: Vec::with_capacity(body.stack_size),
             stdout,
@@ -82,8 +80,11 @@ impl<'a, 'b> CallFrame<'a, 'b> {
             todo!("synchronized methods")
         }
 
+        let mut pc = 0;
+
         loop {
-            let instruction = &body.code[self.pc];
+            let instruction = &body.code[pc];
+            let mut next_instruction_offset = 1isize;
             match instruction {
                 Instruction::r#return { data_type } => {
                     if self
@@ -117,7 +118,6 @@ impl<'a, 'b> CallFrame<'a, 'b> {
                         NumberType::Double => todo!(),
                     };
                     self.operand_stack.push(operand);
-                    self.pc += 1;
                 }
                 Instruction::store {
                     data_type: LoadStoreType::Int,
@@ -140,8 +140,6 @@ impl<'a, 'b> CallFrame<'a, 'b> {
                         Operand::Boolean(_) => todo!(),
                         Operand::ReturnAddress(_) => todo!(),
                     };
-
-                    self.pc += 1;
                 }
                 Instruction::load {
                     data_type: LoadStoreType::Int,
@@ -155,8 +153,6 @@ impl<'a, 'b> CallFrame<'a, 'b> {
                     };
 
                     self.operand_stack.push(Operand::Int(val));
-
-                    self.pc += 1;
                 }
                 Instruction::ldc { index } => {
                     match &self.class.constant_pool()[*index] {
@@ -169,11 +165,9 @@ impl<'a, 'b> CallFrame<'a, 'b> {
                         }
                         _ => todo!(),
                     };
-                    self.pc += 1;
                 }
                 Instruction::invoke { kind, index } => {
                     self.execute_invoke(*index, *kind)?;
-                    self.pc += 1;
                 }
                 Instruction::add { data_type } => {
                     let a = self.operand_stack.pop().wrap_err("missing add operand")?;
@@ -187,11 +181,9 @@ impl<'a, 'b> CallFrame<'a, 'b> {
                         NumberType::Float => todo!(),
                         NumberType::Double => todo!(),
                     }
-                    self.pc += 1;
                 }
                 Instruction::bipush { value } => {
                     self.operand_stack.push(Operand::Int(*value as i32));
-                    self.pc += 1;
                 }
                 Instruction::if_icmp { condition, branch } => {
                     let v2 = self.operand_stack.pop().unwrap().try_as_int().unwrap();
@@ -207,9 +199,7 @@ impl<'a, 'b> CallFrame<'a, 'b> {
                     };
 
                     if condition {
-                        self.pc = self.pc.checked_add_signed(*branch as isize).unwrap();
-                    } else {
-                        self.pc += 1;
+                        next_instruction_offset = *branch as isize;
                     }
                 }
                 Instruction::rem { data_type } => {
@@ -225,7 +215,6 @@ impl<'a, 'b> CallFrame<'a, 'b> {
                     };
 
                     self.operand_stack.push(result);
-                    self.pc += 1;
                 }
                 Instruction::r#if { condition, branch } => {
                     let value = self
@@ -245,20 +234,21 @@ impl<'a, 'b> CallFrame<'a, 'b> {
                     };
 
                     if condition {
-                        self.pc = self.pc.checked_add_signed(*branch as isize).unwrap();
-                    } else {
-                        self.pc += 1;
+                        next_instruction_offset = *branch as isize;
                     }
                 }
                 Instruction::goto { branch } => {
-                    self.pc = self.pc.checked_add_signed(*branch as isize).unwrap();
+                    next_instruction_offset = *branch as isize;
                 }
                 Instruction::inc { index, value } => {
                     *self.locals[*index as usize].try_as_int_mut().unwrap() += *value as i32;
-                    self.pc += 1;
                 }
                 _ => todo!("unimplemented instruction: {instruction:?}"),
             }
+
+            pc = pc
+                .checked_add_signed(next_instruction_offset)
+                .wrap_err("program counter overflowed")?;
         }
     }
 
