@@ -6,7 +6,9 @@ use strum::EnumTryAs;
 use crate::class::{Class, Method};
 use crate::class_file::constant_pool::{self, ConstantInfo};
 use crate::class_file::MethodAccessFlags;
-use crate::instructions::{Instruction, InvokeKind, LoadStoreType, NumberType, ReturnType};
+use crate::instructions::{
+    Condition, Instruction, InvokeKind, LoadStoreType, NumberType, ReturnType,
+};
 
 #[derive(EnumTryAs)]
 pub enum Operand<'a> {
@@ -22,7 +24,7 @@ pub enum Operand<'a> {
     StringConst(&'a str),
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, EnumTryAs)]
 pub enum Local {
     None,
     Boolean(bool),
@@ -129,7 +131,7 @@ impl<'a, 'b> CallFrame<'a, 'b> {
                     self.locals[*index as usize] = match operand {
                         Operand::Byte(v) => Local::Byte(v),
                         Operand::StringConst(_) => todo!(),
-                        Operand::Int(_) => todo!(),
+                        Operand::Int(v) => Local::Int(v),
                         Operand::Short(_) => todo!(),
                         Operand::Long(_) => todo!(),
                         Operand::Char(_) => todo!(),
@@ -185,6 +187,74 @@ impl<'a, 'b> CallFrame<'a, 'b> {
                         NumberType::Float => todo!(),
                         NumberType::Double => todo!(),
                     }
+                    self.pc += 1;
+                }
+                Instruction::bipush { value } => {
+                    self.operand_stack.push(Operand::Int(*value as i32));
+                    self.pc += 1;
+                }
+                Instruction::if_icmp { condition, branch } => {
+                    let v2 = self.operand_stack.pop().unwrap().try_as_int().unwrap();
+                    let v1 = self.operand_stack.pop().unwrap().try_as_int().unwrap();
+
+                    let condition = match condition {
+                        Condition::Eq => v1 == v2,
+                        Condition::Ne => v1 != v2,
+                        Condition::Lt => v1 < v2,
+                        Condition::Le => v1 <= v2,
+                        Condition::Gt => v1 > v2,
+                        Condition::Ge => v1 >= v2,
+                    };
+
+                    if condition {
+                        self.pc = self.pc.checked_add_signed(*branch as isize).unwrap();
+                    } else {
+                        self.pc += 1;
+                    }
+                }
+                Instruction::rem { data_type } => {
+                    let result = match data_type {
+                        NumberType::Int => {
+                            let v2 = self.operand_stack.pop().unwrap().try_as_int().unwrap();
+                            let v1 = self.operand_stack.pop().unwrap().try_as_int().unwrap();
+                            Operand::Int(v1 % v2)
+                        }
+                        NumberType::Long => todo!(),
+                        NumberType::Float => todo!(),
+                        NumberType::Double => todo!(),
+                    };
+
+                    self.operand_stack.push(result);
+                    self.pc += 1;
+                }
+                Instruction::r#if { condition, branch } => {
+                    let value = self
+                        .operand_stack
+                        .pop()
+                        .wrap_err("missing operand for if comparison")?
+                        .try_as_int()
+                        .wrap_err("expected int")?;
+
+                    let condition = match condition {
+                        Condition::Eq => value == 0,
+                        Condition::Ne => value != 0,
+                        Condition::Lt => value < 0,
+                        Condition::Le => value <= 0,
+                        Condition::Gt => value > 0,
+                        Condition::Ge => value >= 0,
+                    };
+
+                    if condition {
+                        self.pc = self.pc.checked_add_signed(*branch as isize).unwrap();
+                    } else {
+                        self.pc += 1;
+                    }
+                }
+                Instruction::goto { branch } => {
+                    self.pc = self.pc.checked_add_signed(*branch as isize).unwrap();
+                }
+                Instruction::inc { index, value } => {
+                    *self.locals[*index as usize].try_as_int_mut().unwrap() += *value as i32;
                     self.pc += 1;
                 }
                 _ => todo!("unimplemented instruction: {instruction:?}"),
