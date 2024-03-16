@@ -26,7 +26,7 @@ fn main() {
                 None
             }
         })
-        .map(|n| create_trial(n))
+        .map(create_trial)
         .collect();
 
     libtest_mimic::run(&args, tests).exit();
@@ -57,7 +57,7 @@ fn create_trial(name: String) -> Trial {
         let class = vm.load_class_file(class_file_path.to_str().unwrap())?;
 
         vm.call_method(
-            &class,
+            class,
             class
                 .method("main", "([Ljava/lang/String;)V")
                 .wrap_err("main method not found")?,
