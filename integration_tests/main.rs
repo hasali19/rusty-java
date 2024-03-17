@@ -51,7 +51,7 @@ fn run_trial(name: &str) -> eyre::Result<()> {
     let source_file_path = Path::new(file!())
         .parent()
         .unwrap()
-        .join(&name)
+        .join(name)
         .with_extension("java");
 
     if !check_stamp(&source_file_path) {
