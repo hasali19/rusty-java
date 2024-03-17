@@ -1,6 +1,6 @@
 ---
 source: integration_tests/main.rs
-assertion_line: 79
+assertion_line: 78
 expression: stdout
 ---
 Hello from inner class
