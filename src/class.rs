@@ -96,6 +96,10 @@ impl<'a> Class<'a> {
         })
     }
 
+    pub fn index(&self) -> u16 {
+        self.class_file.this_class
+    }
+
     pub fn name(&self) -> &'a str {
         self.name
     }

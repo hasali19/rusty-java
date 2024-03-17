@@ -1,7 +1,5 @@
 use std::alloc::Layout;
-use std::io;
 
-use bumpalo::Bump;
 use color_eyre::eyre::{self, bail, eyre, ContextCompat};
 use strum::EnumTryAs;
 
@@ -12,6 +10,7 @@ use crate::instructions::{
     ArrayLoadStoreType, ArrayType, Condition, Instruction, InvokeKind, LoadStoreType, NumberType,
     ReturnType,
 };
+use crate::vm::Vm;
 
 #[derive(Debug, EnumTryAs)]
 pub enum Operand<'a> {
@@ -68,8 +67,7 @@ pub struct CallFrame<'a, 'b> {
     method: &'a Method<'a>,
     locals: Vec<Local>,
     operand_stack: Vec<Operand<'a>>,
-    stdout: &'b mut dyn io::Write,
-    heap: &'a Bump,
+    vm: &'b mut Vm<'a>,
 }
 
 impl<'a, 'b> CallFrame<'a, 'b> {
@@ -77,8 +75,7 @@ impl<'a, 'b> CallFrame<'a, 'b> {
         class: &'a Class<'a>,
         method: &'a Method<'a>,
         args: impl Iterator<Item = Local>,
-        stdout: &'b mut dyn io::Write,
-        heap: &'a Bump,
+        vm: &'b mut Vm<'a>,
     ) -> eyre::Result<CallFrame<'a, 'b>> {
         let body = method.body.as_ref().wrap_err("missing method body")?;
 
@@ -93,8 +90,7 @@ impl<'a, 'b> CallFrame<'a, 'b> {
             method,
             locals,
             operand_stack: Vec::with_capacity(body.stack_size),
-            stdout,
-            heap,
+            vm,
         })
     }
 
@@ -310,7 +306,7 @@ impl<'a, 'b> CallFrame<'a, 'b> {
                     let (array_layout, _) =
                         Layout::new::<ArrayHeader>().extend(array_data_layout)?;
                     let layout = array_layout.pad_to_align();
-                    let ptr = self.heap.alloc_layout(layout);
+                    let ptr = self.vm.heap.alloc_layout(layout);
 
                     unsafe {
                         std::ptr::write_bytes(ptr.as_ptr(), 0, layout.size());
@@ -387,8 +383,21 @@ impl<'a, 'b> CallFrame<'a, 'b> {
             .try_as_utf_8_ref()
             .wrap_err("expected utf8")?;
 
-        let method = self
-            .class
+        let target_class = if method_ref.class_index == self.class.index() {
+            self.class
+        } else {
+            let target_class = self.class.constant_pool()[method_ref.class_index]
+                .try_as_class_ref()
+                .wrap_err("expected class")?;
+
+            let target_class_name = self.class.constant_pool()[target_class.name_index]
+                .try_as_utf_8_ref()
+                .wrap_err("expected utf8")?;
+
+            self.vm.load_class_file(target_class_name)?
+        };
+
+        let method = target_class
             .method(name, descriptor)
             .wrap_err_with(|| eyre!("method not found: {name}{descriptor}"))?;
 
@@ -401,15 +410,15 @@ impl<'a, 'b> CallFrame<'a, 'b> {
                         .wrap_err("missing argument to print")?;
 
                     match arg {
-                        Operand::Byte(v) => write!(self.stdout, "{v}")?,
-                        Operand::StringConst(v) => write!(self.stdout, "{v}")?,
-                        Operand::Int(v) => write!(self.stdout, "{v}")?,
+                        Operand::Byte(v) => write!(self.vm.stdout, "{v}")?,
+                        Operand::StringConst(v) => write!(self.vm.stdout, "{v}")?,
+                        Operand::Int(v) => write!(self.vm.stdout, "{v}")?,
                         Operand::Reference(ptr) => {
                             let header = unsafe { (ptr as *mut ArrayHeader).as_mut().unwrap() };
                             match header.atype {
-                                ArrayType::Int => {
-                                    write!(self.stdout, "{:?}", unsafe { header.data::<i32>()? })?;
-                                }
+                                ArrayType::Int => write!(self.vm.stdout, "{:?}", unsafe {
+                                    header.data::<i32>()?
+                                })?,
                                 t => todo!("{t:?}"),
                             }
                         }
@@ -427,8 +436,7 @@ impl<'a, 'b> CallFrame<'a, 'b> {
                         });
 
                     if let Some(ret) =
-                        CallFrame::new(self.class, method, args, self.stdout, self.heap)?
-                            .execute()?
+                        CallFrame::new(self.class, method, args, self.vm)?.execute()?
                     {
                         self.operand_stack.push(ret);
                     }
