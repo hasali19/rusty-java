@@ -56,7 +56,11 @@ impl<'a> Vm<'a> {
         Ok(class)
     }
 
-    pub fn call_method(&mut self, class: &'a Class, method: &'a Method) -> eyre::Result<()> {
+    pub fn call_method(
+        &mut self,
+        class: &'a Class<'a>,
+        method: &'a Method<'a>,
+    ) -> eyre::Result<()> {
         CallFrame::new(class, method, iter::empty(), self)?.execute()?;
         Ok(())
     }

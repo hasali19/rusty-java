@@ -44,6 +44,14 @@ pub fn parse_method_descriptor(descriptor: &str) -> eyre::Result<MethodDescripto
     })
 }
 
+pub fn parse_field_descriptor(descriptor: &str) -> eyre::Result<FieldDescriptor> {
+    let field_type = parse_field_type
+        .parse(descriptor)
+        .map_err(|e| eyre!("{e}"))?;
+
+    Ok(FieldDescriptor { field_type })
+}
+
 fn parse_base_type<'s>(input: &mut &'s str) -> PResult<BaseType<'s>> {
     dispatch! { any;
         'L' => terminated(take_till(.., ';').map(BaseType::Object), ';'),

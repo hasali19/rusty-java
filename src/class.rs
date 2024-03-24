@@ -1,3 +1,4 @@
+use std::cell::UnsafeCell;
 use std::fmt::Debug;
 use std::io::{self, Cursor};
 use std::num::NonZeroU8;
@@ -6,12 +7,14 @@ use bumpalo::collections::Vec;
 use bumpalo::{vec, Bump};
 use byteorder::{BigEndian, ReadBytesExt};
 use color_eyre::eyre::{self, bail, eyre, Context, ContextCompat};
-use hashbrown::hash_map::DefaultHashBuilder;
 use hashbrown::HashMap;
 
+use crate::call_frame::JvmValue;
 use crate::class_file::constant_pool::ConstantPool;
-use crate::class_file::{ClassFile, MethodAccessFlags};
-use crate::descriptor::{parse_method_descriptor, MethodDescriptor};
+use crate::class_file::{ClassFile, FieldAccessFlags, MethodAccessFlags};
+use crate::descriptor::{
+    parse_field_descriptor, parse_method_descriptor, BaseType, FieldType, MethodDescriptor,
+};
 use crate::instructions::{
     ArrayLoadStoreType, ArrayType, Condition, EqCondition, Instruction, IntegerType, InvokeKind,
     NumberType, OrdCondition, ReturnType,
@@ -22,7 +25,8 @@ use crate::opcodes::OpCode;
 pub struct Class<'a> {
     name: &'a str,
     class_file: &'a ClassFile<'a>,
-    methods: HashMap<MethodId<'a>, Method<'a>, DefaultHashBuilder, &'a Bump>,
+    methods: HashMap<MethodId<'a>, Method<'a>>,
+    static_fields: HashMap<(&'a str, &'a str), UnsafeCell<JvmValue<'a>>>,
 }
 
 #[derive(Debug)]
@@ -53,7 +57,7 @@ impl<'a> Class<'a> {
             name,
             class_file,
             methods: {
-                let mut methods = HashMap::new_in(arena);
+                let mut methods = HashMap::new();
                 for method in &class_file.methods {
                     let name = class_file
                         .constant_pool
@@ -93,6 +97,39 @@ impl<'a> Class<'a> {
                 }
                 methods
             },
+            static_fields: class_file
+                .fields
+                .iter()
+                .filter(|field| field.access_flags.contains(FieldAccessFlags::STATIC))
+                .map(|field| {
+                    let name = class_file.constant_pool[field.name_index]
+                        .try_as_utf_8_ref()
+                        .unwrap();
+
+                    let descriptor_str = class_file.constant_pool[field.descriptor_index]
+                        .try_as_utf_8_ref()
+                        .unwrap();
+
+                    let descriptor = parse_field_descriptor(descriptor_str)?;
+
+                    let value = UnsafeCell::new(match descriptor.field_type {
+                        FieldType::Base(t) => match t {
+                            BaseType::Byte => JvmValue::Byte(0),
+                            BaseType::Char => JvmValue::Char(0),
+                            BaseType::Double => JvmValue::Double(0.0),
+                            BaseType::Float => JvmValue::Float(0.0),
+                            BaseType::Int => JvmValue::Int(0),
+                            BaseType::Long => JvmValue::Long(0),
+                            BaseType::Short => JvmValue::Short(0),
+                            BaseType::Boolean => JvmValue::Boolean(false),
+                            BaseType::Object(_) => JvmValue::Reference(0),
+                        },
+                        FieldType::Array(_, _) => JvmValue::Reference(0),
+                    });
+
+                    Ok(((name.as_str(), descriptor_str.as_str()), value))
+                })
+                .collect::<eyre::Result<_>>()?,
         })
     }
 
@@ -110,6 +147,14 @@ impl<'a> Class<'a> {
 
     pub fn constant_pool(&self) -> &'a ConstantPool {
         &self.class_file.constant_pool
+    }
+
+    pub fn static_field(
+        &self,
+        name: &'a str,
+        descriptor: &'a str,
+    ) -> Option<&UnsafeCell<JvmValue<'a>>> {
+        self.static_fields.get(&(name, descriptor))
     }
 }
 

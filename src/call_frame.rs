@@ -1,4 +1,5 @@
 use std::alloc::Layout;
+use std::cell::UnsafeCell;
 
 use color_eyre::eyre::{self, bail, eyre, ContextCompat};
 use strum::EnumTryAs;
@@ -352,6 +353,14 @@ impl<'a, 'b> CallFrame<'a, 'b> {
                         t => todo!("{t:?}"),
                     }
                 }
+                Instruction::putstatic { index } => unsafe {
+                    // This *should* be safe as long as no other references to the field value exist
+                    *self.get_static_field(*index)?.get() = self.operand_stack.pop().unwrap()
+                },
+                Instruction::getstatic { index } => unsafe {
+                    let value = self.get_static_field(*index)?;
+                    self.operand_stack.push((*value.get()).clone());
+                },
                 _ => todo!("unimplemented instruction: {instruction:?}"),
             }
 
@@ -359,6 +368,45 @@ impl<'a, 'b> CallFrame<'a, 'b> {
                 .checked_add_signed(next_instruction_offset)
                 .wrap_err("program counter overflowed")?;
         }
+    }
+
+    fn get_static_field(&mut self, index: u16) -> eyre::Result<&'a UnsafeCell<JvmValue<'a>>> {
+        let field_ref = self.class.constant_pool()[index]
+            .try_as_field_ref_ref()
+            .unwrap();
+
+        let name_and_type = self.class.constant_pool()[field_ref.name_and_type_index]
+            .try_as_name_and_type_ref()
+            .wrap_err("expected name_and_type")?;
+
+        let name = self.class.constant_pool()[name_and_type.name_index]
+            .try_as_utf_8_ref()
+            .wrap_err("expected utf8")?;
+
+        let descriptor = self.class.constant_pool()[name_and_type.descriptor_index]
+            .try_as_utf_8_ref()
+            .wrap_err("expected utf8")?;
+
+        let target_class = if field_ref.class_index == self.class.index() {
+            self.class
+        } else {
+            let target_class = self.class.constant_pool()[field_ref.class_index]
+                .try_as_class_ref()
+                .wrap_err("expected class")?;
+
+            let target_class_name = self.class.constant_pool()[target_class.name_index]
+                .try_as_utf_8_ref()
+                .wrap_err("expected utf8")?;
+
+            self.vm.load_class_file(target_class_name)?
+        };
+
+        target_class
+            .static_field(name, descriptor)
+            .wrap_err_with(|| {
+                let class_name = target_class.name();
+                eyre!("field {name}({descriptor}) does not exist on {class_name}")
+            })
     }
 
     fn execute_invoke(&mut self, const_index: u16, kind: InvokeKind) -> eyre::Result<()> {
