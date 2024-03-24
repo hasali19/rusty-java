@@ -12,8 +12,8 @@ use crate::instructions::{
 };
 use crate::vm::Vm;
 
-#[derive(Debug, EnumTryAs)]
-pub enum Operand<'a> {
+#[derive(Clone, Debug, EnumTryAs)]
+pub enum JvmValue<'a> {
     Byte(i8),
     Short(i16),
     Int(i32),
@@ -27,25 +27,16 @@ pub enum Operand<'a> {
     StringConst(&'a str),
 }
 
-#[derive(Clone, Copy, Debug, EnumTryAs)]
-pub enum Local {
-    None,
-    Boolean(bool),
-    Byte(i8),
-    Char(u16),
-    Short(i16),
-    Int(i32),
-    Float(f32),
-    Reference(usize),
-    ReturnAddress(usize),
-}
-
 #[derive(Debug)]
 #[repr(C)]
 struct ArrayHeader {
     atype: ArrayType,
     length: usize,
 }
+
+const _: () = {
+    assert!(std::mem::size_of::<Option<JvmValue>>() == 24);
+};
 
 impl ArrayHeader {
     unsafe fn data<'a, T>(&mut self) -> eyre::Result<&'a mut [T]> {
@@ -65,8 +56,8 @@ impl ArrayHeader {
 pub struct CallFrame<'a, 'b> {
     class: &'a Class<'a>,
     method: &'a Method<'a>,
-    locals: Vec<Local>,
-    operand_stack: Vec<Operand<'a>>,
+    locals: Vec<Option<JvmValue<'a>>>,
+    operand_stack: Vec<JvmValue<'a>>,
     vm: &'b mut Vm<'a>,
 }
 
@@ -74,15 +65,15 @@ impl<'a, 'b> CallFrame<'a, 'b> {
     pub fn new(
         class: &'a Class<'a>,
         method: &'a Method<'a>,
-        args: impl Iterator<Item = Local>,
+        args: impl Iterator<Item = JvmValue<'a>>,
         vm: &'b mut Vm<'a>,
     ) -> eyre::Result<CallFrame<'a, 'b>> {
         let body = method.body.as_ref().wrap_err("missing method body")?;
 
-        let mut locals = vec![Local::None; body.locals];
+        let mut locals = vec![None; body.locals];
 
         for (i, arg) in (0..method.descriptor.params.len()).zip(args) {
-            locals[i] = arg;
+            locals[i] = Some(arg);
         }
 
         Ok(CallFrame {
@@ -94,7 +85,7 @@ impl<'a, 'b> CallFrame<'a, 'b> {
         })
     }
 
-    pub fn execute(mut self) -> eyre::Result<Option<Operand<'a>>> {
+    pub fn execute(mut self) -> eyre::Result<Option<JvmValue<'a>>> {
         let body = self.method.body.as_ref().wrap_err("missing method body")?;
 
         if self
@@ -137,7 +128,7 @@ impl<'a, 'b> CallFrame<'a, 'b> {
                 }
                 Instruction::r#const { data_type, value } => {
                     let operand = match data_type {
-                        NumberType::Int => Operand::Int(*value as i32),
+                        NumberType::Int => JvmValue::Int(*value as i32),
                         NumberType::Long => todo!(),
                         NumberType::Float => todo!(),
                         NumberType::Double => todo!(),
@@ -153,12 +144,12 @@ impl<'a, 'b> CallFrame<'a, 'b> {
                         .pop()
                         .wrap_err("no operand provided to istore")?;
 
-                    self.locals[*index as usize] = match operand {
-                        Operand::Byte(v) => Local::Byte(v),
-                        Operand::StringConst(_) => todo!(),
-                        Operand::Int(v) => Local::Int(v),
+                    self.locals[*index as usize] = Some(match operand {
+                        JvmValue::Byte(v) => JvmValue::Byte(v),
+                        JvmValue::StringConst(_) => todo!(),
+                        JvmValue::Int(v) => JvmValue::Int(v),
                         arg => todo!("{arg:?}"),
-                    };
+                    });
                 }
                 Instruction::store {
                     data_type: LoadStoreType::Reference,
@@ -169,33 +160,33 @@ impl<'a, 'b> CallFrame<'a, 'b> {
                         .pop()
                         .wrap_err("no operand provided to istore")?;
 
-                    self.locals[*index as usize] = match operand {
-                        Operand::Reference(v) => Local::Reference(v),
-                        Operand::ReturnAddress(v) => Local::ReturnAddress(v),
+                    self.locals[*index as usize] = Some(match operand {
+                        JvmValue::Reference(v) => JvmValue::Reference(v),
+                        JvmValue::ReturnAddress(v) => JvmValue::ReturnAddress(v),
                         arg => unreachable!("unsupported operand for astore: {arg:?}"),
-                    };
+                    });
                 }
                 Instruction::load {
                     data_type: LoadStoreType::Int,
                     index,
                 } => {
-                    let val = match self.locals[*index as usize] {
-                        Local::None => 0,
-                        Local::Int(v) => v,
-                        Local::Byte(v) => v as i32,
+                    let val = match &self.locals[*index as usize] {
+                        None => 0,
+                        Some(JvmValue::Int(v)) => *v,
+                        Some(JvmValue::Byte(v)) => *v as i32,
                         local => bail!("iload called with invalid local: {local:?}"),
                     };
 
-                    self.operand_stack.push(Operand::Int(val));
+                    self.operand_stack.push(JvmValue::Int(val));
                 }
                 Instruction::load {
                     data_type: LoadStoreType::Reference,
                     index,
                 } => {
-                    let val = match self.locals[*index as usize] {
-                        Local::None => todo!(),
-                        Local::Reference(v) => Operand::Reference(v),
-                        Local::ReturnAddress(v) => Operand::ReturnAddress(v),
+                    let val = match &self.locals[*index as usize] {
+                        None => JvmValue::Reference(0),
+                        Some(JvmValue::Reference(v)) => JvmValue::Reference(*v),
+                        Some(JvmValue::ReturnAddress(v)) => JvmValue::ReturnAddress(*v),
                         local => bail!("aload called with invalid local: {local:?}"),
                     };
 
@@ -204,7 +195,7 @@ impl<'a, 'b> CallFrame<'a, 'b> {
                 Instruction::ldc { index } => {
                     match &self.class.constant_pool()[*index] {
                         ConstantInfo::String(constant_pool::String { string_index }) => {
-                            self.operand_stack.push(Operand::StringConst(
+                            self.operand_stack.push(JvmValue::StringConst(
                                 self.class.constant_pool()[*string_index]
                                     .try_as_utf_8_ref()
                                     .wrap_err("expected utf8")?,
@@ -220,7 +211,7 @@ impl<'a, 'b> CallFrame<'a, 'b> {
                     let a = self.operand_stack.pop().wrap_err("missing add operand")?;
                     let b = self.operand_stack.pop().wrap_err("missing add operand")?;
                     match data_type {
-                        NumberType::Int => self.operand_stack.push(Operand::Int(
+                        NumberType::Int => self.operand_stack.push(JvmValue::Int(
                             a.try_as_int().wrap_err("invalid type")?
                                 + b.try_as_int().wrap_err("invalid type")?,
                         )),
@@ -230,7 +221,7 @@ impl<'a, 'b> CallFrame<'a, 'b> {
                     }
                 }
                 Instruction::bipush { value } => {
-                    self.operand_stack.push(Operand::Int(*value as i32));
+                    self.operand_stack.push(JvmValue::Int(*value as i32));
                 }
                 Instruction::if_icmp { condition, branch } => {
                     let v2 = self.operand_stack.pop().unwrap().try_as_int().unwrap();
@@ -254,7 +245,7 @@ impl<'a, 'b> CallFrame<'a, 'b> {
                         NumberType::Int => {
                             let v2 = self.operand_stack.pop().unwrap().try_as_int().unwrap();
                             let v1 = self.operand_stack.pop().unwrap().try_as_int().unwrap();
-                            Operand::Int(v1 % v2)
+                            JvmValue::Int(v1 % v2)
                         }
                         NumberType::Long => todo!(),
                         NumberType::Float => todo!(),
@@ -288,7 +279,11 @@ impl<'a, 'b> CallFrame<'a, 'b> {
                     next_instruction_offset = *branch as isize;
                 }
                 Instruction::inc { index, value } => {
-                    *self.locals[*index as usize].try_as_int_mut().unwrap() += *value as i32;
+                    *self.locals[*index as usize]
+                        .as_mut()
+                        .unwrap()
+                        .try_as_int_mut()
+                        .unwrap() += *value as i32;
                 }
                 Instruction::newarray { atype } => {
                     let length = self
@@ -318,7 +313,7 @@ impl<'a, 'b> CallFrame<'a, 'b> {
                     }
 
                     self.operand_stack
-                        .push(Operand::Reference(ptr.as_ptr() as _));
+                        .push(JvmValue::Reference(ptr.as_ptr() as _));
                 }
                 Instruction::arraylength => {
                     let reference = self
@@ -330,7 +325,7 @@ impl<'a, 'b> CallFrame<'a, 'b> {
 
                     let header = unsafe { &*(reference as *mut ArrayHeader) };
 
-                    self.operand_stack.push(Operand::Int(header.length as i32));
+                    self.operand_stack.push(JvmValue::Int(header.length as i32));
                 }
                 Instruction::arraystore { data_type } => {
                     let value = self.operand_stack.pop().unwrap();
@@ -410,10 +405,10 @@ impl<'a, 'b> CallFrame<'a, 'b> {
                         .wrap_err("missing argument to print")?;
 
                     match arg {
-                        Operand::Byte(v) => write!(self.vm.stdout, "{v}")?,
-                        Operand::StringConst(v) => write!(self.vm.stdout, "{v}")?,
-                        Operand::Int(v) => write!(self.vm.stdout, "{v}")?,
-                        Operand::Reference(ptr) => {
+                        JvmValue::Byte(v) => write!(self.vm.stdout, "{v}")?,
+                        JvmValue::StringConst(v) => write!(self.vm.stdout, "{v}")?,
+                        JvmValue::Int(v) => write!(self.vm.stdout, "{v}")?,
+                        JvmValue::Reference(ptr) => {
                             let header = unsafe { (ptr as *mut ArrayHeader).as_mut().unwrap() };
                             match header.atype {
                                 ArrayType::Int => write!(self.vm.stdout, "{:?}", unsafe {
@@ -431,7 +426,7 @@ impl<'a, 'b> CallFrame<'a, 'b> {
                         .iter()
                         .map(|_| self.operand_stack.pop().unwrap())
                         .map(|op| match op {
-                            Operand::Int(v) => Local::Int(v),
+                            JvmValue::Int(v) => JvmValue::Int(v),
                             op => todo!("{op:?}"),
                         });
 
