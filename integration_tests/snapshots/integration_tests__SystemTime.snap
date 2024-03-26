@@ -1,0 +1,6 @@
+---
+source: integration_tests/main.rs
+assertion_line: 89
+expression: stdout
+---
+Current time: 933120000000

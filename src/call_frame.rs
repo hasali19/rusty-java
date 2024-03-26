@@ -1,5 +1,6 @@
 use std::alloc::Layout;
 use std::cell::UnsafeCell;
+use std::time::SystemTime;
 
 use color_eyre::eyre::{self, bail, eyre, ContextCompat};
 use strum::EnumTryAs;
@@ -361,6 +362,9 @@ impl<'a, 'b> CallFrame<'a, 'b> {
                     let value = self.get_static_field(*index)?;
                     self.operand_stack.push((*value.get()).clone());
                 },
+                Instruction::aconst_null => {
+                    self.operand_stack.push(JvmValue::Reference(0));
+                }
                 _ => todo!("unimplemented instruction: {instruction:?}"),
             }
 
@@ -446,26 +450,44 @@ impl<'a, 'b> CallFrame<'a, 'b> {
 
         match kind {
             InvokeKind::Static => {
-                if method.access_flags.contains(MethodAccessFlags::NATIVE) && name == "print" {
-                    let arg = self
-                        .operand_stack
-                        .pop()
-                        .wrap_err("missing argument to print")?;
+                if method.access_flags.contains(MethodAccessFlags::NATIVE) {
+                    match name.as_str() {
+                        "registerNatives" => {
+                            // TODO
+                        }
+                        "print" => {
+                            let arg = self
+                                .operand_stack
+                                .pop()
+                                .wrap_err("missing argument to print")?;
 
-                    match arg {
-                        JvmValue::Byte(v) => write!(self.vm.stdout, "{v}")?,
-                        JvmValue::StringConst(v) => write!(self.vm.stdout, "{v}")?,
-                        JvmValue::Int(v) => write!(self.vm.stdout, "{v}")?,
-                        JvmValue::Reference(ptr) => {
-                            let header = unsafe { (ptr as *mut ArrayHeader).as_mut().unwrap() };
-                            match header.atype {
-                                ArrayType::Int => write!(self.vm.stdout, "{:?}", unsafe {
-                                    header.data::<i32>()?
-                                })?,
-                                t => todo!("{t:?}"),
+                            match arg {
+                                JvmValue::StringConst(v) => write!(self.vm.stdout, "{v}")?,
+                                JvmValue::Byte(v) => write!(self.vm.stdout, "{v}")?,
+                                JvmValue::Int(v) => write!(self.vm.stdout, "{v}")?,
+                                JvmValue::Long(v) => write!(self.vm.stdout, "{v}")?,
+                                JvmValue::Reference(ptr) => {
+                                    let header =
+                                        unsafe { (ptr as *mut ArrayHeader).as_mut().unwrap() };
+                                    match header.atype {
+                                        ArrayType::Int => write!(self.vm.stdout, "{:?}", unsafe {
+                                            header.data::<i32>()?
+                                        })?,
+                                        t => todo!("{t:?}"),
+                                    }
+                                }
+                                arg => todo!("{arg:?}"),
                             }
                         }
-                        arg => todo!("{arg:?}"),
+                        "currentTimeMillis" => self.operand_stack.push(JvmValue::Long(
+                            self.vm
+                                .time
+                                .system_time()
+                                .duration_since(SystemTime::UNIX_EPOCH)?
+                                .as_millis()
+                                .try_into()?,
+                        )),
+                        _ => unimplemented!("{name}{descriptor}"),
                     }
                 } else {
                     let args = method

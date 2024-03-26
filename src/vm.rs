@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{self, BufReader};
+use std::io::{self, BufReader, Cursor};
 use std::iter;
 use std::path::Path;
+use std::time::SystemTime;
 
 use bumpalo::Bump;
 use color_eyre::eyre::{self, eyre, Context};
@@ -12,11 +13,24 @@ use crate::class::{Class, Method};
 use crate::class_file::MethodAccessFlags;
 use crate::reader::ClassReader;
 
+pub trait TimeProvider {
+    fn system_time(&self) -> SystemTime;
+}
+
+struct DefaultTimeProvider;
+
+impl TimeProvider for DefaultTimeProvider {
+    fn system_time(&self) -> SystemTime {
+        SystemTime::now()
+    }
+}
+
 pub struct Vm<'a> {
     arena: &'a Bump,
     classes: HashMap<&'a str, &'a Class<'a>>,
     pub(crate) stdout: &'a mut dyn io::Write,
     pub(crate) heap: Bump,
+    pub(crate) time: Box<dyn TimeProvider>,
 }
 
 impl<'a> Vm<'a> {
@@ -26,7 +40,13 @@ impl<'a> Vm<'a> {
             classes: HashMap::new(),
             stdout,
             heap: Bump::new(),
+            time: Box::new(DefaultTimeProvider),
         }
+    }
+
+    pub fn with_time_provider(mut self, time_provider: Box<dyn TimeProvider>) -> Self {
+        self.time = time_provider;
+        self
     }
 
     pub fn load_class_file(&mut self, name: &str) -> eyre::Result<&'a Class<'a>> {
@@ -37,8 +57,20 @@ impl<'a> Vm<'a> {
         }
 
         let path = Path::new(name).with_extension("class");
+
+        let reader: Box<dyn io::Read> = if path.exists() {
+            Box::new(BufReader::new(
+                File::open(&path).wrap_err_with(|| eyre!("failed to open {path:?}"))?,
+            ))
+        } else {
+            Box::new(Cursor::new(
+                jdk_tools::extract_jrt_class(class_name)
+                    .wrap_err_with(|| eyre!("class not found: {class_name}"))?,
+            ))
+        };
+
         let class_file = self.arena.alloc(
-            ClassReader::new(self.arena, BufReader::new(File::open(path)?))
+            ClassReader::new(self.arena, reader)
                 .read_class_file()
                 .wrap_err_with(|| eyre!("failed to read class file '{}'", name))?,
         );

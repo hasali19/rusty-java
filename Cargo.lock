@@ -498,6 +498,7 @@ dependencies = [
  "color-eyre",
  "hashbrown",
  "insta",
+ "jdk-tools",
  "libtest-mimic",
  "strum",
  "winnow",

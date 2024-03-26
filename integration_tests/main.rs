@@ -3,11 +3,12 @@
 use std::fs::{self, File};
 use std::path::Path;
 use std::process::Command;
+use std::time::{Duration, SystemTime};
 
 use bumpalo::Bump;
 use color_eyre::eyre::{self, ContextCompat};
 use libtest_mimic::{Arguments, Failed, Trial};
-use rusty_java::vm::Vm;
+use rusty_java::vm::{TimeProvider, Vm};
 
 fn main() -> eyre::Result<()> {
     color_eyre::install()?;
@@ -46,7 +47,17 @@ fn create_trial(name: String) -> Trial {
 fn run_trial(name: &str) -> eyre::Result<()> {
     let arena = Bump::new();
     let mut stdout = Vec::new();
-    let mut vm = Vm::new(&arena, &mut stdout);
+
+    struct MockTimeProvider;
+
+    impl TimeProvider for MockTimeProvider {
+        fn system_time(&self) -> std::time::SystemTime {
+            // ~30 years after EPOCH
+            SystemTime::UNIX_EPOCH + Duration::from_secs(60 * 60 * 24 * 30 * 12 * 30)
+        }
+    }
+
+    let mut vm = Vm::new(&arena, &mut stdout).with_time_provider(Box::new(MockTimeProvider));
 
     let source_file_path = Path::new(file!())
         .parent()

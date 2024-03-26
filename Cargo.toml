@@ -20,6 +20,7 @@ byteorder = "1.5.0"
 clap = { version = "4.5.1", features = ["derive"] }
 color-eyre = "0.6.2"
 hashbrown = "0.14.3"
+jdk-tools = { version = "0.1.0", path = "jdk-tools" }
 strum = { git = "https://github.com/hasali19/strum", branch = "fix-missing-generics", features = [
     "derive",
 ] }
