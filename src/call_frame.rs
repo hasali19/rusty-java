@@ -118,7 +118,7 @@ impl<'a, 'b> CallFrame<'a, 'b> {
 
         let mut locals = vec![None; body.locals];
 
-        for (i, arg) in (0..method.descriptor.params.len()).zip(args) {
+        for (i, arg) in args.enumerate() {
             locals[i] = Some(arg);
         }
 
