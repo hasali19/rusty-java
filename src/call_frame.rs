@@ -660,7 +660,7 @@ impl<'a, 'b> CallFrame<'a, 'b> {
                 let args = &self.operand_stack[args_start..];
                 let args = args.iter().cloned();
 
-                let ret_value = CallFrame::new(self.class, method, args, self.vm)?.execute()?;
+                let ret_value = CallFrame::new(target_class, method, args, self.vm)?.execute()?;
 
                 self.operand_stack
                     .truncate(self.operand_stack.len() - nargs);
