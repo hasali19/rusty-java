@@ -4,3 +4,4 @@ assertion_line: 89
 expression: stdout
 ---
 integration_tests/Objects$MyClass {x: 123, y: 1, z: [1, 2, 3]}
+integration_tests/Objects$MyClass {x: 124, y: 1, z: [1, 2, 3]}

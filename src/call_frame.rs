@@ -519,6 +519,57 @@ impl<'a, 'b> CallFrame<'a, 'b> {
 
                     data[field_index] = value;
                 }
+                Instruction::getfield { index } => {
+                    let field_ref = self.class.constant_pool()[*index]
+                        .try_as_field_ref_ref()
+                        .wrap_err_with(|| {
+                            eyre!("unexpected: {:?}", self.class.constant_pool()[*index])
+                        })?;
+
+                    let name_and_type = self.class.constant_pool()[field_ref.name_and_type_index]
+                        .try_as_name_and_type_ref()
+                        .wrap_err("expected name_and_type")?;
+
+                    let name = self.class.constant_pool()[name_and_type.name_index]
+                        .try_as_utf_8_ref()
+                        .wrap_err("expected utf8")?;
+
+                    let descriptor = self.class.constant_pool()[name_and_type.descriptor_index]
+                        .try_as_utf_8_ref()
+                        .wrap_err("expected utf8")?;
+
+                    let target_class = if field_ref.class_index == self.class.index() {
+                        self.class
+                    } else {
+                        let target_class = self.class.constant_pool()[field_ref.class_index]
+                            .try_as_class_ref()
+                            .wrap_err("expected class")?;
+
+                        let target_class_name = self.class.constant_pool()[target_class.name_index]
+                            .try_as_utf_8_ref()
+                            .wrap_err("expected utf8")?;
+
+                        self.vm.load_class_file(target_class_name)?
+                    };
+
+                    let objectref = self
+                        .operand_stack
+                        .pop()
+                        .unwrap()
+                        .try_as_reference()
+                        .unwrap();
+
+                    let field_index = target_class.field_ordinal(name, descriptor).unwrap();
+
+                    let data = unsafe {
+                        std::slice::from_raw_parts_mut(
+                            (objectref as *mut u8).add(24).cast::<JvmValue>(),
+                            target_class.fields().len(),
+                        )
+                    };
+
+                    self.operand_stack.push(data[field_index].clone());
+                }
                 Instruction::dup => {
                     self.operand_stack.push(
                         self.operand_stack
@@ -658,6 +709,27 @@ impl<'a, 'b> CallFrame<'a, 'b> {
                 let args_start = self.operand_stack.len() - nargs;
 
                 let args = &self.operand_stack[args_start..];
+                let args = args.iter().cloned();
+
+                let ret_value = CallFrame::new(target_class, method, args, self.vm)?.execute()?;
+
+                self.operand_stack
+                    .truncate(self.operand_stack.len() - nargs);
+
+                if let Some(ret) = ret_value {
+                    self.operand_stack.push(ret);
+                }
+            }
+            InvokeKind::Virtual => {
+                // TODO: Handle signature polymorphic methods (https://docs.oracle.com/javase/specs/jvms/se21/html/jvms-6.html#jvms-6.5.invokevirtual)
+
+                let nargs = method.descriptor.params.len() + 1; // args + objectref
+                let args_start = self.operand_stack.len() - nargs;
+
+                let args = &self.operand_stack[args_start..];
+
+                // TODO: Resolve method based on runtime type
+
                 let args = args.iter().cloned();
 
                 let ret_value = CallFrame::new(target_class, method, args, self.vm)?.execute()?;
