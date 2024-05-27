@@ -148,7 +148,7 @@ pub struct FieldInfo<'a> {
 }
 
 bitflags! {
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     pub struct FieldAccessFlags: u16 {
         const PUBLIC = 0x0001;
         const PRIVATE = 0x0002;

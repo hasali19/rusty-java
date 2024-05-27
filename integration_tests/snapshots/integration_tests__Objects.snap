@@ -1,0 +1,6 @@
+---
+source: integration_tests/main.rs
+assertion_line: 89
+expression: stdout
+---
+integration_tests/Objects$MyClass {x: 123, y: 1, z: [1, 2, 3]}

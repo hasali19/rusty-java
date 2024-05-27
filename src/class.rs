@@ -13,7 +13,8 @@ use crate::call_frame::JvmValue;
 use crate::class_file::constant_pool::ConstantPool;
 use crate::class_file::{ClassFile, FieldAccessFlags, MethodAccessFlags};
 use crate::descriptor::{
-    parse_field_descriptor, parse_method_descriptor, BaseType, FieldType, MethodDescriptor,
+    parse_field_descriptor, parse_method_descriptor, BaseType, FieldDescriptor, FieldType,
+    MethodDescriptor,
 };
 use crate::instructions::{
     ArrayLoadStoreType, ArrayType, Condition, EqCondition, Instruction, IntegerType, InvokeKind,
@@ -27,6 +28,8 @@ pub struct Class<'a> {
     class_file: &'a ClassFile<'a>,
     methods: HashMap<MethodId<'a>, Method<'a>>,
     static_fields: HashMap<(&'a str, &'a str), UnsafeCell<JvmValue<'a>>>,
+    field_ordinals: HashMap<(&'a str, &'a str), usize>,
+    fields: std::vec::Vec<Field<'a>>,
 }
 
 #[derive(Debug)]
@@ -41,6 +44,13 @@ pub struct MethodBody<'a> {
     pub locals: usize,
     pub stack_size: usize,
     pub code: Vec<'a, Instruction>,
+}
+
+#[derive(Debug)]
+pub struct Field<'a> {
+    pub name: &'a str,
+    pub descriptor: FieldDescriptor<'a>,
+    pub access_flags: FieldAccessFlags,
 }
 
 impl<'a> Class<'a> {
@@ -130,6 +140,45 @@ impl<'a> Class<'a> {
                     Ok(((name.as_str(), descriptor_str.as_str()), value))
                 })
                 .collect::<eyre::Result<_>>()?,
+            field_ordinals: class_file
+                .fields
+                .iter()
+                .filter(|field| !field.access_flags.contains(FieldAccessFlags::STATIC))
+                .enumerate()
+                .map(|(i, field)| {
+                    let name = class_file.constant_pool[field.name_index]
+                        .try_as_utf_8_ref()
+                        .unwrap();
+
+                    let descriptor_str = class_file.constant_pool[field.descriptor_index]
+                        .try_as_utf_8_ref()
+                        .unwrap();
+
+                    Ok(((name.as_str(), descriptor_str.as_str()), i))
+                })
+                .collect::<eyre::Result<_>>()?,
+            fields: class_file
+                .fields
+                .iter()
+                .filter(|field| !field.access_flags.contains(FieldAccessFlags::STATIC))
+                .map(|field| {
+                    let name = class_file.constant_pool[field.name_index]
+                        .try_as_utf_8_ref()
+                        .unwrap();
+
+                    let descriptor_str = class_file.constant_pool[field.descriptor_index]
+                        .try_as_utf_8_ref()
+                        .unwrap();
+
+                    let descriptor = parse_field_descriptor(descriptor_str)?;
+
+                    Ok(Field {
+                        name,
+                        descriptor,
+                        access_flags: field.access_flags.clone(),
+                    })
+                })
+                .collect::<eyre::Result<_>>()?,
         })
     }
 
@@ -155,6 +204,14 @@ impl<'a> Class<'a> {
         descriptor: &'a str,
     ) -> Option<&UnsafeCell<JvmValue<'a>>> {
         self.static_fields.get(&(name, descriptor))
+    }
+
+    pub fn fields(&self) -> &[Field<'a>] {
+        &self.fields
+    }
+
+    pub fn field_ordinal(&self, name: &'a str, descriptor: &'a str) -> Option<usize> {
+        self.field_ordinals.get(&(name, descriptor)).copied()
     }
 }
 

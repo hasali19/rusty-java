@@ -1,5 +1,7 @@
 use std::alloc::Layout;
 use std::cell::UnsafeCell;
+use std::mem;
+use std::ptr::NonNull;
 use std::time::SystemTime;
 
 use color_eyre::eyre::{self, bail, eyre, ContextCompat};
@@ -8,6 +10,7 @@ use strum::EnumTryAs;
 use crate::class::{Class, Method};
 use crate::class_file::constant_pool::{self, ConstantInfo};
 use crate::class_file::MethodAccessFlags;
+use crate::descriptor::{BaseType, FieldType};
 use crate::instructions::{
     ArrayLoadStoreType, ArrayType, Condition, Instruction, InvokeKind, LoadStoreType, NumberType,
     ReturnType,
@@ -29,6 +32,23 @@ pub enum JvmValue<'a> {
     StringConst(&'a str),
 }
 
+const _: () = {
+    assert!(mem::size_of::<Option<JvmValue>>() == 24);
+};
+
+#[derive(Debug)]
+#[repr(C)]
+enum RefTypeHeader {
+    Object(ObjectHeader),
+    Array(ArrayHeader),
+}
+
+#[derive(Debug)]
+#[repr(C)]
+struct ObjectHeader {
+    class: NonNull<Class<'static>>,
+}
+
 #[derive(Debug)]
 #[repr(C)]
 struct ArrayHeader {
@@ -37,21 +57,45 @@ struct ArrayHeader {
 }
 
 const _: () = {
-    assert!(std::mem::size_of::<Option<JvmValue>>() == 24);
+    assert!(mem::size_of::<RefTypeHeader>() == 24);
 };
 
-impl ArrayHeader {
-    unsafe fn data<'a, T>(&mut self) -> eyre::Result<&'a mut [T]> {
-        let header_layout = Layout::new::<ArrayHeader>();
-        let array_data_layout = Layout::array::<T>(self.length)?;
+impl RefTypeHeader {
+    unsafe fn array_data<'a, T>(&mut self) -> eyre::Result<&'a mut [T]> {
+        let length = match self {
+            Self::Object(_) => bail!("expected an array"),
+            Self::Array(header) => header.length,
+        };
+
+        let header_layout = Layout::new::<RefTypeHeader>();
+        let array_data_layout = Layout::array::<T>(length)?;
 
         let (array_layout, _) = header_layout.extend(array_data_layout)?;
         let offset = array_layout.size() - array_data_layout.size();
 
-        let header_ptr = self as *mut ArrayHeader;
+        let header_ptr = self as *mut RefTypeHeader;
         let data_ptr = (header_ptr as usize + offset) as *mut T;
 
-        Ok(unsafe { std::slice::from_raw_parts_mut(data_ptr, self.length) })
+        Ok(unsafe { std::slice::from_raw_parts_mut(data_ptr, length) })
+    }
+
+    unsafe fn object_data<'a>(&mut self) -> eyre::Result<&'a mut [JvmValue]> {
+        let target_class = match self {
+            Self::Object(object) => object.class,
+            Self::Array(_) => bail!("expected an object"),
+        };
+
+        let fields_layout = Layout::array::<JvmValue>((*target_class.as_ptr()).fields().len())?;
+        let (object_layout, _) = Layout::new::<RefTypeHeader>().extend(fields_layout)?;
+
+        let offset = object_layout.size() - fields_layout.size();
+
+        let header_ptr = self as *mut RefTypeHeader;
+        let data_ptr = (header_ptr as usize + offset) as *mut JvmValue;
+
+        Ok(unsafe {
+            std::slice::from_raw_parts_mut(data_ptr, (*target_class.as_ptr()).fields().len())
+        })
     }
 }
 
@@ -301,17 +345,17 @@ impl<'a, 'b> CallFrame<'a, 'b> {
                     };
 
                     let (array_layout, _) =
-                        Layout::new::<ArrayHeader>().extend(array_data_layout)?;
+                        Layout::new::<RefTypeHeader>().extend(array_data_layout)?;
                     let layout = array_layout.pad_to_align();
                     let ptr = self.vm.heap.alloc_layout(layout);
 
                     unsafe {
                         std::ptr::write_bytes(ptr.as_ptr(), 0, layout.size());
 
-                        *(ptr.as_ptr() as *mut ArrayHeader) = ArrayHeader {
+                        *(ptr.as_ptr() as *mut RefTypeHeader) = RefTypeHeader::Array(ArrayHeader {
                             atype: *atype,
                             length,
-                        };
+                        });
                     }
 
                     self.operand_stack
@@ -325,9 +369,12 @@ impl<'a, 'b> CallFrame<'a, 'b> {
                         .try_as_reference()
                         .unwrap();
 
-                    let header = unsafe { &*(reference as *mut ArrayHeader) };
+                    let header = unsafe { &*(reference as *mut RefTypeHeader) };
+                    let RefTypeHeader::Array(array) = header else {
+                        bail!("invalid header: {header:?}")
+                    };
 
-                    self.operand_stack.push(JvmValue::Int(header.length as i32));
+                    self.operand_stack.push(JvmValue::Int(array.length as i32));
                 }
                 Instruction::arraystore { data_type } => {
                     let value = self.operand_stack.pop().unwrap();
@@ -339,16 +386,20 @@ impl<'a, 'b> CallFrame<'a, 'b> {
                         .try_as_reference()
                         .unwrap();
 
-                    let header = unsafe { (ptr as *mut ArrayHeader).as_mut().unwrap() };
+                    let header = unsafe { (ptr as *mut RefTypeHeader).as_mut().unwrap() };
+                    let RefTypeHeader::Array(array) = header else {
+                        bail!("invalid header: {header:?}")
+                    };
 
-                    match header.atype {
+                    match array.atype {
                         ArrayType::Int => {
                             if *data_type != ArrayLoadStoreType::Int {
-                                bail!("invalid array type: {:?}", header.atype);
+                                bail!("invalid array type: {:?}", array.atype);
                             }
 
                             unsafe {
-                                header.data::<i32>()?[index as usize] = value.try_as_int().unwrap();
+                                header.array_data::<i32>()?[index as usize] =
+                                    value.try_as_int().unwrap();
                             }
                         }
                         t => todo!("{t:?}"),
@@ -364,6 +415,117 @@ impl<'a, 'b> CallFrame<'a, 'b> {
                 },
                 Instruction::aconst_null => {
                     self.operand_stack.push(JvmValue::Reference(0));
+                }
+                Instruction::new { index } => {
+                    let target_class = self.class.constant_pool()[*index]
+                        .try_as_class_ref()
+                        .wrap_err("expected class")?;
+
+                    let target_class_name = self.class.constant_pool()[target_class.name_index]
+                        .try_as_utf_8_ref()
+                        .wrap_err("expected utf8")?;
+
+                    let target_class = self.vm.load_class_file(target_class_name)?;
+
+                    let fields_layout = Layout::array::<JvmValue>(target_class.fields().len())?;
+                    let (object_layout, _) =
+                        Layout::new::<RefTypeHeader>().extend(fields_layout)?;
+
+                    let layout = object_layout.pad_to_align();
+                    let ptr = self.vm.heap.alloc_layout(layout);
+
+                    unsafe {
+                        ptr.as_ptr()
+                            .cast::<RefTypeHeader>()
+                            .write(RefTypeHeader::Object(ObjectHeader {
+                                class: mem::transmute(target_class),
+                            }));
+
+                        let fields = ptr
+                            .as_ptr()
+                            .add(object_layout.size() - fields_layout.size())
+                            .cast::<JvmValue>();
+
+                        for (i, field) in target_class.fields().iter().enumerate() {
+                            fields.add(i).write(match &field.descriptor.field_type {
+                                FieldType::Base(t) => match t {
+                                    BaseType::Byte => todo!(),
+                                    BaseType::Char => todo!(),
+                                    BaseType::Double => todo!(),
+                                    BaseType::Float => todo!(),
+                                    BaseType::Int => JvmValue::Int(0),
+                                    BaseType::Long => todo!(),
+                                    BaseType::Short => todo!(),
+                                    BaseType::Boolean => JvmValue::Boolean(false),
+                                    BaseType::Object(_) => todo!(),
+                                },
+                                FieldType::Array(_, _) => JvmValue::Reference(0),
+                            });
+                        }
+                    }
+
+                    self.operand_stack
+                        .push(JvmValue::Reference(ptr.as_ptr() as usize));
+                }
+                Instruction::putfield { index } => {
+                    let field_ref = self.class.constant_pool()[*index]
+                        .try_as_field_ref_ref()
+                        .wrap_err_with(|| {
+                            eyre!("unexpected: {:?}", self.class.constant_pool()[*index])
+                        })?;
+
+                    let name_and_type = self.class.constant_pool()[field_ref.name_and_type_index]
+                        .try_as_name_and_type_ref()
+                        .wrap_err("expected name_and_type")?;
+
+                    let name = self.class.constant_pool()[name_and_type.name_index]
+                        .try_as_utf_8_ref()
+                        .wrap_err("expected utf8")?;
+
+                    let descriptor = self.class.constant_pool()[name_and_type.descriptor_index]
+                        .try_as_utf_8_ref()
+                        .wrap_err("expected utf8")?;
+
+                    let target_class = if field_ref.class_index == self.class.index() {
+                        self.class
+                    } else {
+                        let target_class = self.class.constant_pool()[field_ref.class_index]
+                            .try_as_class_ref()
+                            .wrap_err("expected class")?;
+
+                        let target_class_name = self.class.constant_pool()[target_class.name_index]
+                            .try_as_utf_8_ref()
+                            .wrap_err("expected utf8")?;
+
+                        self.vm.load_class_file(target_class_name)?
+                    };
+
+                    let value = self.operand_stack.pop().unwrap();
+                    let objectref = self
+                        .operand_stack
+                        .pop()
+                        .unwrap()
+                        .try_as_reference()
+                        .unwrap();
+
+                    let field_index = target_class.field_ordinal(name, descriptor).unwrap();
+
+                    let data = unsafe {
+                        std::slice::from_raw_parts_mut(
+                            (objectref as *mut u8).add(24).cast::<JvmValue>(),
+                            target_class.fields().len(),
+                        )
+                    };
+
+                    data[field_index] = value;
+                }
+                Instruction::dup => {
+                    self.operand_stack.push(
+                        self.operand_stack
+                            .last()
+                            .wrap_err("operand stack is empty")?
+                            .clone(),
+                    );
                 }
                 _ => todo!("unimplemented instruction: {instruction:?}"),
             }
@@ -461,23 +623,7 @@ impl<'a, 'b> CallFrame<'a, 'b> {
                                 .pop()
                                 .wrap_err("missing argument to print")?;
 
-                            match arg {
-                                JvmValue::StringConst(v) => write!(self.vm.stdout, "{v}")?,
-                                JvmValue::Byte(v) => write!(self.vm.stdout, "{v}")?,
-                                JvmValue::Int(v) => write!(self.vm.stdout, "{v}")?,
-                                JvmValue::Long(v) => write!(self.vm.stdout, "{v}")?,
-                                JvmValue::Reference(ptr) => {
-                                    let header =
-                                        unsafe { (ptr as *mut ArrayHeader).as_mut().unwrap() };
-                                    match header.atype {
-                                        ArrayType::Int => write!(self.vm.stdout, "{:?}", unsafe {
-                                            header.data::<i32>()?
-                                        })?,
-                                        t => todo!("{t:?}"),
-                                    }
-                                }
-                                arg => todo!("{arg:?}"),
-                            }
+                            self.print_jvm_value(&arg)?;
                         }
                         "currentTimeMillis" => self.operand_stack.push(JvmValue::Long(
                             self.vm
@@ -507,7 +653,76 @@ impl<'a, 'b> CallFrame<'a, 'b> {
                     }
                 }
             }
-            _ => todo!(),
+            InvokeKind::Special => {
+                let nargs = method.descriptor.params.len() + 1; // args + objectref
+                let args_start = self.operand_stack.len() - nargs;
+
+                let args = &self.operand_stack[args_start..];
+                let args = args.iter().cloned();
+
+                let ret_value = CallFrame::new(self.class, method, args, self.vm)?.execute()?;
+
+                self.operand_stack
+                    .truncate(self.operand_stack.len() - nargs);
+
+                if let Some(ret) = ret_value {
+                    self.operand_stack.push(ret);
+                }
+            }
+            _ => {
+                todo!("{}::{name}({descriptor}) ({kind:?})", target_class.name())
+            }
+        }
+
+        Ok(())
+    }
+
+    fn print_jvm_value(&mut self, value: &JvmValue) -> eyre::Result<()> {
+        match value {
+            JvmValue::StringConst(v) => write!(self.vm.stdout, "{v}")?,
+            JvmValue::Byte(v) => write!(self.vm.stdout, "{v}")?,
+            JvmValue::Int(v) => write!(self.vm.stdout, "{v}")?,
+            JvmValue::Long(v) => write!(self.vm.stdout, "{v}")?,
+            JvmValue::Reference(ptr) => {
+                let header = unsafe { (*ptr as *mut RefTypeHeader).as_mut() };
+
+                match header {
+                    None => {
+                        write!(self.vm.stdout, "null")?;
+                    }
+                    Some(header) => match header {
+                        RefTypeHeader::Array(array) => match array.atype {
+                            ArrayType::Int => {
+                                let elements = unsafe { header.array_data::<i32>()? };
+                                write!(self.vm.stdout, "{elements:?}")?
+                            }
+                            t => todo!("{t:?}"),
+                        },
+                        RefTypeHeader::Object(object) => {
+                            let class = unsafe { object.class.as_ref() };
+                            let fields = unsafe { header.object_data() }?;
+
+                            write!(self.vm.stdout, "{} {{", class.name())?;
+
+                            for (i, field) in class.fields().iter().enumerate() {
+                                let name = field.name;
+                                let value = &fields[i];
+
+                                write!(self.vm.stdout, "{name}: ")?;
+
+                                self.print_jvm_value(value)?;
+
+                                if i < fields.len() - 1 {
+                                    write!(self.vm.stdout, ", ")?;
+                                }
+                            }
+
+                            write!(self.vm.stdout, "}}")?;
+                        }
+                    },
+                };
+            }
+            arg => todo!("{arg:?}"),
         }
 
         Ok(())
