@@ -4,7 +4,7 @@ public class Objects {
     private static native void print(Object v);
 
     public static void main(String[] args) {
-        var obj = new ChildClass(123, true, new int[] { 1, 2, 3 });
+        var obj = new ChildClass(123, true, new int[] { 1, 2, 3 }, "hello");
         print(obj);
         print("\n");
 
@@ -31,14 +31,11 @@ public class Objects {
 
     private static class ChildClass extends MyClass {
 
-        public ChildClass(int x, boolean y, int[] z) {
-            super(x, y, z);
-        }
+        private String u;
 
-        @Override
-        public void incrementX() {
-            super.incrementX();
-            this.y = false;
+        public ChildClass(int x, boolean y, int[] z, String u) {
+            super(x, y, z);
+            this.u = u;
         }
     }
 }

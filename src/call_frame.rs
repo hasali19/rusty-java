@@ -233,6 +233,7 @@ impl<'a, 'b> CallFrame<'a, 'b> {
                         None => JvmValue::Reference(0),
                         Some(JvmValue::Reference(v)) => JvmValue::Reference(*v),
                         Some(JvmValue::ReturnAddress(v)) => JvmValue::ReturnAddress(*v),
+                        Some(JvmValue::StringConst(v)) => JvmValue::StringConst(*v),
                         local => bail!("aload called with invalid local: {local:?}"),
                     };
 
@@ -457,7 +458,7 @@ impl<'a, 'b> CallFrame<'a, 'b> {
                                     BaseType::Long => todo!(),
                                     BaseType::Short => todo!(),
                                     BaseType::Boolean => JvmValue::Boolean(false),
-                                    BaseType::Object(_) => todo!(),
+                                    BaseType::Object(_) => JvmValue::Reference(0),
                                 },
                                 FieldType::Array(_, _) => JvmValue::Reference(0),
                             });
@@ -598,7 +599,7 @@ impl<'a, 'b> CallFrame<'a, 'b> {
             .try_as_utf_8_ref()
             .wrap_err("expected utf8")?;
 
-        let target_class = if method_ref.class_index == self.class.index() {
+        let mut target_class = if method_ref.class_index == self.class.index() {
             self.class
         } else {
             let target_class = self.class.constant_pool()[method_ref.class_index]
@@ -612,9 +613,16 @@ impl<'a, 'b> CallFrame<'a, 'b> {
             self.vm.load_class_file(target_class_name)?
         };
 
-        let method = target_class
-            .method(name, descriptor)
-            .wrap_err_with(|| eyre!("method not found: {name}{descriptor}"))?;
+        let method = loop {
+            let method = target_class.method(name, descriptor);
+            if let Some(method) = method {
+                break method;
+            }
+
+            target_class = target_class
+                .super_class()
+                .wrap_err_with(|| eyre!("method not found: {name}{descriptor}"))?;
+        };
 
         match kind {
             InvokeKind::Static => {

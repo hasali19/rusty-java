@@ -26,6 +26,7 @@ use crate::opcodes::OpCode;
 pub struct Class<'a> {
     name: &'a str,
     class_file: &'a ClassFile<'a>,
+    super_class: Option<&'a Class<'a>>,
     methods: HashMap<MethodId<'a>, Method<'a>>,
     static_fields: HashMap<(&'a str, &'a str), UnsafeCell<JvmValue<'a>>>,
     fields: std::vec::Vec<Field<'a>>,
@@ -120,6 +121,7 @@ impl<'a> Class<'a> {
         Ok(Class {
             name,
             class_file,
+            super_class,
             methods: {
                 let mut methods = HashMap::new();
                 for method in &class_file.methods {
@@ -205,6 +207,10 @@ impl<'a> Class<'a> {
 
     pub fn name(&self) -> &'a str {
         self.name
+    }
+
+    pub fn super_class(&self) -> Option<&'a Class<'a>> {
+        self.super_class
     }
 
     pub fn method<'b: 'a>(&'a self, name: &'b str, descriptor: &'b str) -> Option<&'a Method<'a>> {
