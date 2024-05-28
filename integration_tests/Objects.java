@@ -11,6 +11,10 @@ public class Objects {
         obj.incrementX();
         print(obj);
         print("\n");
+
+        ((MyClass) obj).setY(false);
+        print(obj);
+        print("\n");
     }
 
     private static class MyClass {
@@ -27,6 +31,10 @@ public class Objects {
         public void incrementX() {
             x++;
         }
+
+        public void setY(boolean y) {
+            this.y = y;
+        }
     }
 
     private static class ChildClass extends MyClass {
@@ -36,6 +44,12 @@ public class Objects {
         public ChildClass(int x, boolean y, int[] z, String u) {
             super(x, y, z);
             this.u = u;
+        }
+
+        @Override
+        public void setY(boolean y) {
+            super.setY(y);
+            u = "goodbye";
         }
     }
 }

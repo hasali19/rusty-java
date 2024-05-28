@@ -4,3 +4,4 @@ expression: stdout
 ---
 integration_tests/Objects$ChildClass {x: 123, y: 1, z: [1, 2, 3], u: hello}
 integration_tests/Objects$ChildClass {x: 124, y: 1, z: [1, 2, 3], u: hello}
+integration_tests/Objects$ChildClass {x: 124, y: 0, z: [1, 2, 3], u: goodbye}

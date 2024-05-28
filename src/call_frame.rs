@@ -613,6 +613,7 @@ impl<'a, 'b> CallFrame<'a, 'b> {
             self.vm.load_class_file(target_class_name)?
         };
 
+        // TODO: Do we need to ignore super class for static methods?
         let method = loop {
             let method = target_class.method(name, descriptor);
             if let Some(method) = method {
@@ -691,11 +692,40 @@ impl<'a, 'b> CallFrame<'a, 'b> {
 
                 let args = &self.operand_stack[args_start..];
 
-                // TODO: Resolve method based on runtime type
+                // TODO: Resolve interface methods
+
+                let (selected_class, selected_method) = if method
+                    .access_flags
+                    .contains(MethodAccessFlags::PRIVATE)
+                {
+                    (target_class, method)
+                } else {
+                    let objectref = args[0].try_as_reference_ref().copied().unwrap();
+                    let header = objectref as *mut RefTypeHeader;
+
+                    let mut object_class: &'a Class<'a> = unsafe {
+                        match header.as_ref().unwrap() {
+                            RefTypeHeader::Object(header) => mem::transmute(header.class.as_ref()),
+                            RefTypeHeader::Array(_) => todo!(),
+                        }
+                    };
+
+                    loop {
+                        let method = object_class.method(name, descriptor);
+                        if let Some(method) = method {
+                            break (object_class, method);
+                        }
+
+                        object_class = object_class
+                            .super_class()
+                            .wrap_err_with(|| eyre!("method not found: {name}{descriptor}"))?;
+                    }
+                };
 
                 let args = args.iter().cloned();
 
-                let ret_value = CallFrame::new(target_class, method, args, self.vm)?.execute()?;
+                let ret_value =
+                    CallFrame::new(selected_class, selected_method, args, self.vm)?.execute()?;
 
                 self.operand_stack
                     .truncate(self.operand_stack.len() - nargs);
