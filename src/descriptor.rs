@@ -3,7 +3,7 @@ use winnow::combinator::{alt, delimited, dispatch, empty, fail, repeat, terminat
 use winnow::token::{any, take_till, take_while};
 use winnow::{PResult, Parser};
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum BaseType<'a> {
     Byte,
     Char,
@@ -16,18 +16,18 @@ pub enum BaseType<'a> {
     Object(&'a str),
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum FieldType<'a> {
     Base(BaseType<'a>),
     Array(u8, BaseType<'a>),
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct FieldDescriptor<'a> {
     pub field_type: FieldType<'a>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct MethodDescriptor<'a> {
     pub params: Vec<FieldType<'a>>,
     pub return_type: Option<FieldType<'a>>,

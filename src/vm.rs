@@ -75,7 +75,11 @@ impl<'a> Vm<'a> {
                 .wrap_err_with(|| eyre!("failed to read class file '{}'", name))?,
         );
 
-        let class = self.arena.alloc(Class::new(self.arena, class_file)?);
+        let class = self
+            .arena
+            .alloc(Class::new(self.arena, class_file, &mut |name| {
+                self.load_class_file(name)
+            })?);
 
         if let Some(clinit) = class.method("<clinit>", "()V")
             && clinit.access_flags.contains(MethodAccessFlags::STATIC)

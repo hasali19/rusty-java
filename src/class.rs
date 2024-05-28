@@ -28,8 +28,8 @@ pub struct Class<'a> {
     class_file: &'a ClassFile<'a>,
     methods: HashMap<MethodId<'a>, Method<'a>>,
     static_fields: HashMap<(&'a str, &'a str), UnsafeCell<JvmValue<'a>>>,
-    field_ordinals: HashMap<(&'a str, &'a str), usize>,
     fields: std::vec::Vec<Field<'a>>,
+    field_ordinals: HashMap<(&'a str, &'a str), usize>,
 }
 
 #[derive(Debug)]
@@ -46,7 +46,7 @@ pub struct MethodBody<'a> {
     pub code: Vec<'a, Instruction>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Field<'a> {
     pub name: &'a str,
     pub descriptor: FieldDescriptor<'a>,
@@ -54,14 +54,68 @@ pub struct Field<'a> {
 }
 
 impl<'a> Class<'a> {
-    pub fn new(arena: &'a Bump, class_file: &'a ClassFile) -> eyre::Result<Class<'a>> {
+    pub fn new(
+        arena: &'a Bump,
+        class_file: &'a ClassFile,
+        class_loader: &mut dyn FnMut(&str) -> eyre::Result<&'a Class<'a>>,
+    ) -> eyre::Result<Class<'a>> {
         let this_class = class_file.constant_pool[class_file.this_class]
             .try_as_class_ref()
             .unwrap();
 
+        let super_class = if class_file.super_class == 0 {
+            None
+        } else {
+            class_file.constant_pool[class_file.super_class]
+                .try_as_class_ref()
+                .map(|class| {
+                    let name = class_file.constant_pool[class.name_index]
+                        .try_as_utf_8_ref()
+                        .unwrap();
+                    class_loader(name)
+                })
+                .transpose()?
+        };
+
         let name = class_file.constant_pool[this_class.name_index]
             .try_as_utf_8_ref()
             .unwrap();
+
+        let mut fields = std::vec![];
+        let mut field_ordinals = HashMap::new();
+
+        // If the class has a super class, we copy its fields into the child class.
+        if let Some(super_class) = super_class {
+            fields.extend(super_class.fields.iter().cloned());
+            field_ordinals.extend(super_class.field_ordinals.iter());
+        }
+
+        for field in &class_file.fields {
+            if field.access_flags.contains(FieldAccessFlags::STATIC) {
+                continue;
+            }
+
+            let name = class_file.constant_pool[field.name_index]
+                .try_as_utf_8_ref()
+                .unwrap();
+
+            let descriptor_str = class_file.constant_pool[field.descriptor_index]
+                .try_as_utf_8_ref()
+                .unwrap();
+
+            let descriptor = parse_field_descriptor(descriptor_str)?;
+
+            fields.push(Field {
+                name,
+                descriptor,
+                access_flags: field.access_flags.clone(),
+            });
+
+            field_ordinals.insert(
+                (name.as_str(), descriptor_str.as_str()),
+                field_ordinals.len(),
+            );
+        }
 
         Ok(Class {
             name,
@@ -140,45 +194,8 @@ impl<'a> Class<'a> {
                     Ok(((name.as_str(), descriptor_str.as_str()), value))
                 })
                 .collect::<eyre::Result<_>>()?,
-            field_ordinals: class_file
-                .fields
-                .iter()
-                .filter(|field| !field.access_flags.contains(FieldAccessFlags::STATIC))
-                .enumerate()
-                .map(|(i, field)| {
-                    let name = class_file.constant_pool[field.name_index]
-                        .try_as_utf_8_ref()
-                        .unwrap();
-
-                    let descriptor_str = class_file.constant_pool[field.descriptor_index]
-                        .try_as_utf_8_ref()
-                        .unwrap();
-
-                    Ok(((name.as_str(), descriptor_str.as_str()), i))
-                })
-                .collect::<eyre::Result<_>>()?,
-            fields: class_file
-                .fields
-                .iter()
-                .filter(|field| !field.access_flags.contains(FieldAccessFlags::STATIC))
-                .map(|field| {
-                    let name = class_file.constant_pool[field.name_index]
-                        .try_as_utf_8_ref()
-                        .unwrap();
-
-                    let descriptor_str = class_file.constant_pool[field.descriptor_index]
-                        .try_as_utf_8_ref()
-                        .unwrap();
-
-                    let descriptor = parse_field_descriptor(descriptor_str)?;
-
-                    Ok(Field {
-                        name,
-                        descriptor,
-                        access_flags: field.access_flags.clone(),
-                    })
-                })
-                .collect::<eyre::Result<_>>()?,
+            fields,
+            field_ordinals,
         })
     }
 
