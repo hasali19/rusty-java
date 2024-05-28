@@ -468,107 +468,12 @@ impl<'a, 'b> CallFrame<'a, 'b> {
                         .push(JvmValue::Reference(ptr.as_ptr() as usize));
                 }
                 Instruction::putfield { index } => {
-                    let field_ref = self.class.constant_pool()[*index]
-                        .try_as_field_ref_ref()
-                        .wrap_err_with(|| {
-                            eyre!("unexpected: {:?}", self.class.constant_pool()[*index])
-                        })?;
-
-                    let name_and_type = self.class.constant_pool()[field_ref.name_and_type_index]
-                        .try_as_name_and_type_ref()
-                        .wrap_err("expected name_and_type")?;
-
-                    let name = self.class.constant_pool()[name_and_type.name_index]
-                        .try_as_utf_8_ref()
-                        .wrap_err("expected utf8")?;
-
-                    let descriptor = self.class.constant_pool()[name_and_type.descriptor_index]
-                        .try_as_utf_8_ref()
-                        .wrap_err("expected utf8")?;
-
-                    let target_class = if field_ref.class_index == self.class.index() {
-                        self.class
-                    } else {
-                        let target_class = self.class.constant_pool()[field_ref.class_index]
-                            .try_as_class_ref()
-                            .wrap_err("expected class")?;
-
-                        let target_class_name = self.class.constant_pool()[target_class.name_index]
-                            .try_as_utf_8_ref()
-                            .wrap_err("expected utf8")?;
-
-                        self.vm.load_class_file(target_class_name)?
-                    };
-
                     let value = self.operand_stack.pop().unwrap();
-                    let objectref = self
-                        .operand_stack
-                        .pop()
-                        .unwrap()
-                        .try_as_reference()
-                        .unwrap();
-
-                    let field_index = target_class.field_ordinal(name, descriptor).unwrap();
-
-                    let data = unsafe {
-                        std::slice::from_raw_parts_mut(
-                            (objectref as *mut u8).add(24).cast::<JvmValue>(),
-                            target_class.fields().len(),
-                        )
-                    };
-
-                    data[field_index] = value;
+                    *self.get_instance_field(*index)? = value;
                 }
                 Instruction::getfield { index } => {
-                    let field_ref = self.class.constant_pool()[*index]
-                        .try_as_field_ref_ref()
-                        .wrap_err_with(|| {
-                            eyre!("unexpected: {:?}", self.class.constant_pool()[*index])
-                        })?;
-
-                    let name_and_type = self.class.constant_pool()[field_ref.name_and_type_index]
-                        .try_as_name_and_type_ref()
-                        .wrap_err("expected name_and_type")?;
-
-                    let name = self.class.constant_pool()[name_and_type.name_index]
-                        .try_as_utf_8_ref()
-                        .wrap_err("expected utf8")?;
-
-                    let descriptor = self.class.constant_pool()[name_and_type.descriptor_index]
-                        .try_as_utf_8_ref()
-                        .wrap_err("expected utf8")?;
-
-                    let target_class = if field_ref.class_index == self.class.index() {
-                        self.class
-                    } else {
-                        let target_class = self.class.constant_pool()[field_ref.class_index]
-                            .try_as_class_ref()
-                            .wrap_err("expected class")?;
-
-                        let target_class_name = self.class.constant_pool()[target_class.name_index]
-                            .try_as_utf_8_ref()
-                            .wrap_err("expected utf8")?;
-
-                        self.vm.load_class_file(target_class_name)?
-                    };
-
-                    let objectref = self
-                        .operand_stack
-                        .pop()
-                        .unwrap()
-                        .try_as_reference()
-                        .unwrap();
-
-                    let field_index = target_class.field_ordinal(name, descriptor).unwrap();
-
-                    let data = unsafe {
-                        std::slice::from_raw_parts_mut(
-                            (objectref as *mut u8).add(24).cast::<JvmValue>(),
-                            target_class.fields().len(),
-                        )
-                    };
-
-                    self.operand_stack.push(data[field_index].clone());
+                    let value = self.get_instance_field(*index)?;
+                    self.operand_stack.push((*value).clone());
                 }
                 Instruction::dup => {
                     self.operand_stack.push(
@@ -624,6 +529,56 @@ impl<'a, 'b> CallFrame<'a, 'b> {
                 let class_name = target_class.name();
                 eyre!("field {name}({descriptor}) does not exist on {class_name}")
             })
+    }
+
+    fn get_instance_field(&mut self, index: u16) -> eyre::Result<&'b mut JvmValue<'a>> {
+        let field_ref = self.class.constant_pool()[index]
+            .try_as_field_ref_ref()
+            .wrap_err_with(|| eyre!("unexpected: {:?}", self.class.constant_pool()[index]))?;
+
+        let name_and_type = self.class.constant_pool()[field_ref.name_and_type_index]
+            .try_as_name_and_type_ref()
+            .wrap_err("expected name_and_type")?;
+
+        let name = self.class.constant_pool()[name_and_type.name_index]
+            .try_as_utf_8_ref()
+            .wrap_err("expected utf8")?;
+
+        let descriptor = self.class.constant_pool()[name_and_type.descriptor_index]
+            .try_as_utf_8_ref()
+            .wrap_err("expected utf8")?;
+
+        let target_class = if field_ref.class_index == self.class.index() {
+            self.class
+        } else {
+            let target_class = self.class.constant_pool()[field_ref.class_index]
+                .try_as_class_ref()
+                .wrap_err("expected class")?;
+
+            let target_class_name = self.class.constant_pool()[target_class.name_index]
+                .try_as_utf_8_ref()
+                .wrap_err("expected utf8")?;
+
+            self.vm.load_class_file(target_class_name)?
+        };
+
+        let objectref = self
+            .operand_stack
+            .pop()
+            .unwrap()
+            .try_as_reference()
+            .unwrap();
+
+        let field_index = target_class.field_ordinal(name, descriptor).unwrap();
+
+        let data = unsafe {
+            std::slice::from_raw_parts_mut(
+                (objectref as *mut u8).add(24).cast::<JvmValue>(),
+                target_class.fields().len(),
+            )
+        };
+
+        Ok(&mut data[field_index])
     }
 
     fn execute_invoke(&mut self, const_index: u16, kind: InvokeKind) -> eyre::Result<()> {
