@@ -31,6 +31,7 @@ pub struct Vm<'a> {
     pub(crate) stdout: &'a mut dyn io::Write,
     pub(crate) heap: Bump,
     pub(crate) time: Box<dyn TimeProvider>,
+    system_jvm: Option<jdk_tools::Jvm>,
 }
 
 impl<'a> Vm<'a> {
@@ -41,6 +42,7 @@ impl<'a> Vm<'a> {
             stdout,
             heap: Bump::new(),
             time: Box::new(DefaultTimeProvider),
+            system_jvm: None,
         }
     }
 
@@ -64,7 +66,8 @@ impl<'a> Vm<'a> {
             ))
         } else {
             Box::new(Cursor::new(
-                jdk_tools::extract_jrt_class(class_name)
+                self.system_jvm()?
+                    .extract_jrt_class(class_name)
                     .wrap_err_with(|| eyre!("class not found: {class_name}"))?,
             ))
         };
@@ -99,5 +102,13 @@ impl<'a> Vm<'a> {
     ) -> eyre::Result<()> {
         CallFrame::new(class, method, iter::empty(), self)?.execute()?;
         Ok(())
+    }
+
+    fn system_jvm(&mut self) -> eyre::Result<&jdk_tools::Jvm> {
+        if self.system_jvm.is_none() {
+            self.system_jvm = Some(jdk_tools::Jvm::new()?);
+        }
+
+        Ok(unsafe { self.system_jvm.as_ref().unwrap_unchecked() })
     }
 }

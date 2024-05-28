@@ -2,6 +2,7 @@ use std::io::Write;
 
 use clap::Parser;
 use color_eyre::eyre::{self, ContextCompat};
+use jdk_tools::Jvm;
 
 #[derive(Parser)]
 struct Args {
@@ -22,7 +23,7 @@ fn main() -> eyre::Result<()> {
         })
         .wrap_err("could not determine a suitable output path, please specify one")?;
 
-    let bytes = jdk_tools::extract_jrt_class(&args.class)?;
+    let bytes = Jvm::new()?.extract_jrt_class(&args.class)?;
 
     if out_path == "-" {
         std::io::stdout().write_all(&bytes)?;
