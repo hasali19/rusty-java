@@ -233,7 +233,7 @@ impl<'a, 'b> CallFrame<'a, 'b> {
                         None => JvmValue::Reference(0),
                         Some(JvmValue::Reference(v)) => JvmValue::Reference(*v),
                         Some(JvmValue::ReturnAddress(v)) => JvmValue::ReturnAddress(*v),
-                        Some(JvmValue::StringConst(v)) => JvmValue::StringConst(*v),
+                        Some(JvmValue::StringConst(v)) => JvmValue::StringConst(v),
                         local => bail!("aload called with invalid local: {local:?}"),
                     };
 
@@ -439,7 +439,9 @@ impl<'a, 'b> CallFrame<'a, 'b> {
                         ptr.as_ptr()
                             .cast::<RefTypeHeader>()
                             .write(RefTypeHeader::Object(ObjectHeader {
-                                class: mem::transmute(target_class),
+                                class: mem::transmute::<&Class<'_>, NonNull<Class<'_>>>(
+                                    target_class,
+                                ),
                             }));
 
                         let fields = ptr
@@ -705,7 +707,9 @@ impl<'a, 'b> CallFrame<'a, 'b> {
 
                     let mut object_class: &'a Class<'a> = unsafe {
                         match header.as_ref().unwrap() {
-                            RefTypeHeader::Object(header) => mem::transmute(header.class.as_ref()),
+                            RefTypeHeader::Object(header) => {
+                                mem::transmute::<&Class<'_>, &'a Class<'a>>(header.class.as_ref())
+                            }
                             RefTypeHeader::Array(_) => todo!(),
                         }
                     };

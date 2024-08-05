@@ -1,4 +1,4 @@
-#![feature(cursor_remaining, let_chains, lint_reasons, macro_metavar_expr)]
+#![feature(cursor_remaining, let_chains, macro_metavar_expr)]
 
 pub mod call_frame;
 pub mod class;

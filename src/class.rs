@@ -546,7 +546,6 @@ pub fn decode_instructions<'a>(
 trait EndianReadExt {
     fn read_u16_be(&mut self) -> io::Result<u16>;
     fn read_i16_be(&mut self) -> io::Result<i16>;
-    fn read_u32_be(&mut self) -> io::Result<u32>;
     fn read_i32_be(&mut self) -> io::Result<i32>;
 }
 
@@ -557,10 +556,6 @@ impl<R: io::Read> EndianReadExt for R {
 
     fn read_i16_be(&mut self) -> io::Result<i16> {
         self.read_i16::<BigEndian>()
-    }
-
-    fn read_u32_be(&mut self) -> io::Result<u32> {
-        self.read_u32::<BigEndian>()
     }
 
     fn read_i32_be(&mut self) -> io::Result<i32> {
