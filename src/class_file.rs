@@ -27,7 +27,7 @@ pub mod constant_pool {
     pub struct ConstantPool<'a>(pub(crate) bumpalo::collections::Vec<'a, ConstantInfo<'a>>);
 
     impl<'a> ConstantPool<'a> {
-        pub fn get(&self, index: u16) -> Option<&ConstantInfo> {
+        pub fn get(&self, index: u16) -> Option<&ConstantInfo<'_>> {
             self.0.get(index.checked_sub(1)? as usize)
         }
     }

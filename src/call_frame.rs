@@ -4,12 +4,12 @@ use std::mem;
 use std::ptr::NonNull;
 use std::time::SystemTime;
 
-use color_eyre::eyre::{self, bail, eyre, ContextCompat};
+use color_eyre::eyre::{self, ContextCompat, bail, eyre};
 use strum::EnumTryAs;
 
 use crate::class::{Class, Method};
-use crate::class_file::constant_pool::{self, ConstantInfo};
 use crate::class_file::MethodAccessFlags;
+use crate::class_file::constant_pool::{self, ConstantInfo};
 use crate::descriptor::{BaseType, FieldType};
 use crate::instructions::{
     ArrayLoadStoreType, ArrayType, Condition, Instruction, InvokeKind, LoadStoreType, NumberType,
@@ -79,23 +79,26 @@ impl RefTypeHeader {
         Ok(unsafe { std::slice::from_raw_parts_mut(data_ptr, length) })
     }
 
-    unsafe fn object_data<'a>(&mut self) -> eyre::Result<&'a mut [JvmValue]> {
-        let target_class = match self {
-            Self::Object(object) => object.class,
-            Self::Array(_) => bail!("expected an object"),
-        };
+    unsafe fn object_data<'a>(&mut self) -> eyre::Result<&'a mut [JvmValue<'_>]> {
+        unsafe {
+            let target_class = match self {
+                Self::Object(object) => object.class,
+                Self::Array(_) => bail!("expected an object"),
+            };
 
-        let fields_layout = Layout::array::<JvmValue>((*target_class.as_ptr()).fields().len())?;
-        let (object_layout, _) = Layout::new::<RefTypeHeader>().extend(fields_layout)?;
+            let fields_layout = Layout::array::<JvmValue>((*target_class.as_ptr()).fields().len())?;
+            let (object_layout, _) = Layout::new::<RefTypeHeader>().extend(fields_layout)?;
 
-        let offset = object_layout.size() - fields_layout.size();
+            let offset = object_layout.size() - fields_layout.size();
 
-        let header_ptr = self as *mut RefTypeHeader;
-        let data_ptr = (header_ptr as usize + offset) as *mut JvmValue;
+            let header_ptr = self as *mut RefTypeHeader;
+            let data_ptr = (header_ptr as usize + offset) as *mut JvmValue;
 
-        Ok(unsafe {
-            std::slice::from_raw_parts_mut(data_ptr, (*target_class.as_ptr()).fields().len())
-        })
+            Ok(std::slice::from_raw_parts_mut(
+                data_ptr,
+                (*target_class.as_ptr()).fields().len(),
+            ))
+        }
     }
 }
 
@@ -162,7 +165,7 @@ impl<'a, 'b> CallFrame<'a, 'b> {
                         ReturnType::Int => {
                             return Ok(Some(
                                 self.operand_stack.pop().wrap_err("missing return value")?,
-                            ))
+                            ));
                         }
                         ReturnType::Long => todo!(),
                         ReturnType::Float => todo!(),

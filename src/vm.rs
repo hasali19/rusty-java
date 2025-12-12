@@ -6,7 +6,7 @@ use std::path::Path;
 use std::time::SystemTime;
 
 use bumpalo::Bump;
-use color_eyre::eyre::{self, eyre, Context};
+use color_eyre::eyre::{self, Context, eyre};
 
 use crate::call_frame::CallFrame;
 use crate::class::{Class, Method};

@@ -1,9 +1,9 @@
 use std::io;
 
 use bumpalo::collections::{CollectIn, String, Vec};
-use bumpalo::{vec, Bump};
+use bumpalo::{Bump, vec};
 use byteorder::{BigEndian, ReadBytesExt};
-use color_eyre::eyre::{self, bail, eyre, Context};
+use color_eyre::eyre::{self, Context, bail, eyre};
 
 use crate::class_file::constant_pool::{self, ConstantInfo, ConstantPool};
 use crate::class_file::{

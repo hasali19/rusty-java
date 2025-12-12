@@ -33,7 +33,7 @@ pub struct MethodDescriptor<'a> {
     pub return_type: Option<FieldType<'a>>,
 }
 
-pub fn parse_method_descriptor(descriptor: &str) -> eyre::Result<MethodDescriptor> {
+pub fn parse_method_descriptor(descriptor: &str) -> eyre::Result<MethodDescriptor<'_>> {
     let (params, return_type) = (parse_params_types, parse_return_type)
         .parse(descriptor)
         .map_err(|e| eyre!("{e}"))?;
@@ -44,7 +44,7 @@ pub fn parse_method_descriptor(descriptor: &str) -> eyre::Result<MethodDescripto
     })
 }
 
-pub fn parse_field_descriptor(descriptor: &str) -> eyre::Result<FieldDescriptor> {
+pub fn parse_field_descriptor(descriptor: &str) -> eyre::Result<FieldDescriptor<'_>> {
     let field_type = parse_field_type
         .parse(descriptor)
         .map_err(|e| eyre!("{e}"))?;

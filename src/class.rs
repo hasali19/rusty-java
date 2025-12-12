@@ -4,17 +4,17 @@ use std::io::{self, Cursor};
 use std::num::NonZeroU8;
 
 use bumpalo::collections::Vec;
-use bumpalo::{vec, Bump};
+use bumpalo::{Bump, vec};
 use byteorder::{BigEndian, ReadBytesExt};
-use color_eyre::eyre::{self, bail, eyre, Context, ContextCompat};
+use color_eyre::eyre::{self, Context, ContextCompat, bail, eyre};
 use hashbrown::HashMap;
 
 use crate::call_frame::JvmValue;
 use crate::class_file::constant_pool::ConstantPool;
 use crate::class_file::{ClassFile, FieldAccessFlags, MethodAccessFlags};
 use crate::descriptor::{
-    parse_field_descriptor, parse_method_descriptor, BaseType, FieldDescriptor, FieldType,
-    MethodDescriptor,
+    BaseType, FieldDescriptor, FieldType, MethodDescriptor, parse_field_descriptor,
+    parse_method_descriptor,
 };
 use crate::instructions::{
     ArrayLoadStoreType, ArrayType, Condition, EqCondition, Instruction, IntegerType, InvokeKind,
@@ -217,7 +217,7 @@ impl<'a> Class<'a> {
         self.methods.get(&MethodId { name, descriptor })
     }
 
-    pub fn constant_pool(&self) -> &'a ConstantPool {
+    pub fn constant_pool(&self) -> &'a ConstantPool<'_> {
         &self.class_file.constant_pool
     }
 
